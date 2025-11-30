@@ -3,7 +3,6 @@ logs
 *.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
@@ -22,3 +21,17 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Debug scripts and artifacts
+debug_*.py
+debug_*.ts
+fetch_*.py
+test_*.py
+*.py
+debug_output.html
+
+# Documentation artifacts
+task.md
+implementation_plan.md
+walkthrough.md
+.agent/

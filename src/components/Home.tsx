@@ -120,15 +120,28 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
         // Jikan API expects comma separated IDs for multiple genres
         const genreString = selectedGenres.join(',');
 
-        let orderBy = 'popularity';
-        let sort = 'desc';
+        let orderBy: string | undefined = undefined;
+        let sort: string | undefined = undefined;
 
         if (sortBy === 'members') {
             orderBy = 'members';
+            sort = 'desc';
         } else if (sortBy === 'score') {
             orderBy = 'score';
+            sort = 'desc';
         } else if (sortBy === 'start_date') {
             orderBy = 'start_date';
+            sort = 'desc';
+        } else if (sortBy === 'popularity') {
+            // If explicit popularity is requested OR it's default
+            // BUT if we have a query, we usually want relevance (undefined orderBy)
+            // If we have NO query (just browsing genres), we want popularity.
+
+            if (!searchQuery.trim()) {
+                orderBy = 'popularity';
+                sort = 'desc';
+            }
+            // If there IS a query, leaving orderBy undefined uses Jikan's default (Relevance)
         }
 
         const results = await MangaService.searchManga(searchQuery, genreString, 1, orderBy, sort);
@@ -142,15 +155,23 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
         const nextPage = page + 1;
         const genreString = selectedGenres.join(',');
 
-        let orderBy = 'popularity';
-        let sort = 'desc';
+        let orderBy: string | undefined = undefined;
+        let sort: string | undefined = undefined;
 
         if (sortBy === 'members') {
             orderBy = 'members';
+            sort = 'desc';
         } else if (sortBy === 'score') {
             orderBy = 'score';
+            sort = 'desc';
         } else if (sortBy === 'start_date') {
             orderBy = 'start_date';
+            sort = 'desc';
+        } else if (sortBy === 'popularity') {
+            if (!searchQuery.trim()) {
+                orderBy = 'popularity';
+                sort = 'desc';
+            }
         }
 
         const results = await MangaService.searchManga(searchQuery, genreString, nextPage, orderBy, sort);

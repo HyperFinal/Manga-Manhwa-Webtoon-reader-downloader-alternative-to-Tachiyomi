@@ -16,7 +16,16 @@ A simple, clean, and ad-free Manga and Webtoon reader. Born as a lightweight alt
     *   Reading modes: Left-to-Right (Manga), Right-to-Left, or Vertical (Webtoon).
 *   **Modern Interface**: Dark design Netflix-style, clean and intuitive.
 
-## 🚀 Installation (Android)
+## � Screenshots
+
+<div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;">
+  <img src="screenshots/5866144248338517173.jpg" height="400" alt="Library" />
+  <img src="screenshots/5866144248338517174.jpg" height="400" alt="Reader Settings" />
+  <img src="screenshots/5866144248338517175.jpg" height="400" alt="Search Filters" />
+  <img src="screenshots/5866144248338517177.jpg" height="400" alt="Chapter List" />
+</div>
+
+## �🚀 Installation (Android)
 
 1.  Download the latest `.apk` file from the [Releases](https://github.com/HyperFinal/Manga-Manhwa-Webtoon-reader-downloader-alternative-to-Tachiyomi/releases) section.
 2.  Install it on your Android device.

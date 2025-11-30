@@ -44,7 +44,7 @@ export const MangaService = {
     // Simple in-memory cache
     searchCache: new Map<string, MangaMetadata[]>(),
 
-    searchManga: async (query: string, genres?: string, page: number = 1, orderBy: string = 'popularity', sort: string = 'desc'): Promise<MangaMetadata[]> => {
+    searchManga: async (query: string, genres?: string, page: number = 1, orderBy?: string, sort?: string): Promise<MangaMetadata[]> => {
         const cacheKey = `${query}|${genres}|${page}|${orderBy}|${sort}`;
         if (MangaService.searchCache.has(cacheKey)) {
             console.log(`[MangaService] Serving from cache: ${cacheKey}`);
@@ -60,10 +60,15 @@ export const MangaService = {
                 q: query,
                 sfw: true,
                 page: page,
-                limit: 20,
-                order_by: orderBy,
-                sort: sort
+                limit: 20
             };
+
+            if (orderBy) {
+                params.order_by = orderBy;
+            }
+            if (sort) {
+                params.sort = sort;
+            }
 
             if (genres) {
                 params.genres = genres;
