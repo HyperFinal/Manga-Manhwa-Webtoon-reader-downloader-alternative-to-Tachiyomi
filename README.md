@@ -1,73 +1,30 @@
-# React + TypeScript + Vite
+# 📚 Manga & Webtoon Reader
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A simple, clean, and ad-free Manga and Webtoon reader. Born as a lightweight alternative to Tachiyomi, designed for those who just want to read comfortably.
 
-Currently, two official plugins are available:
+## ✨ Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+*   **Personal Library**: Save your favorite manga and webtoons in one place.
+*   **Powerful Search**: Find any title thanks to Jikan (MyAnimeList) integration. You can filter by genre and sort by popularity, new, or rating.
+*   **Online & Offline Reading**:
+    *   Download chapters to read when you have no internet.
+    *   Support for `.cbz` files.
+*   **Webtoon Support**: Download and read your favorite Webtoons (with vertical scroll support).
+*   **Customizable Reader**:
+    *   Double tap or pinch to zoom.
+    *   Smooth swipe navigation.
+    *   Reading modes: Left-to-Right (Manga), Right-to-Left, or Vertical (Webtoon).
+*   **Modern Interface**: Dark design Netflix-style, clean and intuitive.
 
-## React Compiler
+## 🚀 Installation (Android)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1.  Download the latest `.apk` file from the [Releases](https://github.com/HyperFinal/Manga-Manhwa-Webtoon-reader-downloader-alternative-to-Tachiyomi/releases) section.
+2.  Install it on your Android device.
+3.  Enjoy reading!
 
-## Expanding the ESLint configuration
+## ❤️ Support
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+If you like the app and want to buy me a coffee (or an extra chapter), you can do it here:
+[Donate with PayPal](https://www.paypal.com/donate/?hosted_button_id=RYRGN9J2U3AYW)
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+---
