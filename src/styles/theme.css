@@ -1,0 +1,165 @@
+:root {
+  --primary: #E50914;
+  --primary-hover: #b20710;
+  --background: #141414;
+  --surface: #1f1f1f;
+  --text: #ffffff;
+  --text-secondary: #b3b3b3;
+  --radius: 4px;
+  --header-height: 64px;
+}
+
+body {
+  margin: 0;
+  font-family: 'Netflix Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background-color: var(--background);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Typography */
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 500;
+}
+
+h1 {
+  font-size: 2rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+/* Components */
+.btn {
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.5rem 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background-color: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+}
+
+.btn-secondary {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-icon {
+  background: none;
+  color: white;
+  padding: 0.5rem;
+}
+
+.btn-icon:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Inputs */
+.input-dark {
+  background: #333;
+  border: 1px solid #333;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.input-dark:focus {
+  outline: none;
+  border-color: var(--text-secondary);
+}
+
+/* Cards */
+.manga-card {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: transform 0.3s ease;
+  aspect-ratio: 2/3;
+  cursor: pointer;
+}
+
+.manga-card:hover {
+  transform: scale(1.05);
+  z-index: 10;
+}
+
+.manga-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.manga-card-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent);
+  padding: 1rem;
+  padding-top: 2rem;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}

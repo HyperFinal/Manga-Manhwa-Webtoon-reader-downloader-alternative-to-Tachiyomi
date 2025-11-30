@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MangaReader</string>
+    <string name="title_activity_main">MangaReader</string>
+    <string name="package_name">com.myself.mangareader</string>
+    <string name="custom_url_scheme">com.myself.mangareader</string>
+</resources>
