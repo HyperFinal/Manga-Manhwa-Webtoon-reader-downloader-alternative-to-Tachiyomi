@@ -1,23 +1,83 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { StorageService } from '../services/StorageService';
 import type { Manga, Chapter } from '../services/StorageService';
-import { ArrowLeft, Plus, Play, Trash2 } from 'lucide-react';
+import { ArrowLeft, Plus, Play, Trash2, Check } from 'lucide-react';
 import { OnlineChapterList } from './OnlineChapterList';
 
 interface MangaDetailsProps {
     manga: Manga;
     onBack: () => void;
-    onRead: (file: File | string) => void;
+    onRead: (file: File | string, chapterId?: string, page?: number) => void;
     onUpdateManga: (updatedManga: Manga) => void;
     onRemove: () => void;
+    // Download props
+    downloadQueue: string[];
+    activeDownloads: string[];
+    downloadProgress: Record<string, number>;
+    onQueueDownload: (chapter: any, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => void;
 }
 
-export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRead, onUpdateManga, onRemove }) => {
+export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRead, onUpdateManga, onRemove, downloadQueue, activeDownloads, downloadProgress, onQueueDownload }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isImporting, setIsImporting] = useState(false);
     const [activeTab, setActiveTab] = useState<'local' | 'online'>('local');
     const [deleteConfirmation, setDeleteConfirmation] = useState<Chapter | null>(null);
     const [showRemoveConfirmation, setShowRemoveConfirmation] = useState(false);
+    const [showBulkDeleteConfirmation, setShowBulkDeleteConfirmation] = useState(false);
+
+    // Cache for online chapters to prevent reloading on tab switch
+    const [cachedOnlineChapters, setCachedOnlineChapters] = useState<any[]>([]);
+
+    // Reset cache and tab when manga changes
+    useEffect(() => {
+        setCachedOnlineChapters([]);
+        setActiveTab('local');
+    }, [manga.id]);
+
+    // Multi-select state
+    const [selectedChapters, setSelectedChapters] = useState<Set<string>>(new Set());
+    const isSelectionMode = selectedChapters.size > 0;
+    const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+
+    const handleLongPress = (chapterId: string) => {
+        const newSelected = new Set(selectedChapters);
+        newSelected.add(chapterId);
+        setSelectedChapters(newSelected);
+    };
+
+    const toggleSelection = (chapterId: string) => {
+        const newSelected = new Set(selectedChapters);
+        if (newSelected.has(chapterId)) {
+            newSelected.delete(chapterId);
+        } else {
+            newSelected.add(chapterId);
+        }
+        setSelectedChapters(newSelected);
+    };
+
+    const handleBulkDelete = async () => {
+        if (selectedChapters.size === 0) return;
+        setShowBulkDeleteConfirmation(true);
+    };
+
+    const confirmBulkDelete = async () => {
+        const chaptersToDelete = manga.chapters.filter(c => selectedChapters.has(c.id));
+
+        for (const chapter of chaptersToDelete) {
+            await StorageService.deleteChapterFile(chapter.fileName);
+        }
+
+        const updatedChapters = manga.chapters.filter(c => !selectedChapters.has(c.id));
+        const updatedManga = { ...manga, chapters: updatedChapters };
+
+        const library = await StorageService.loadLibrary();
+        const newLibrary = library.map(m => m.id === manga.id ? updatedManga : m);
+        await StorageService.saveLibrary(newLibrary);
+
+        onUpdateManga(updatedManga);
+        setSelectedChapters(new Set());
+        setShowBulkDeleteConfirmation(false);
+    };
 
     const handleRemove = () => {
         setShowRemoveConfirmation(true);
@@ -57,14 +117,23 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
 
     const handleReadChapter = async (chapter: Chapter) => {
         try {
-            const data = await StorageService.readChapterFile(chapter.fileName);
-            // data is now a base64 string
-            onRead(data);
+            // Pass the filename directly, do not load content
+            const page = (manga.lastReadChapterId === chapter.id) ? (manga.lastReadPage || 0) : 0;
+            onRead(chapter.fileName, chapter.id, page);
         } catch (error) {
             console.error("Failed to load chapter", error);
             alert("Could not load chapter file.");
         }
     };
+
+    const getChapterNumber = (title: string): number => {
+        const match = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
+        return match ? parseFloat(match[1] || match[0]) : 0;
+    };
+
+    const sortedChapters = [...manga.chapters].sort((a, b) => {
+        return getChapterNumber(a.title) - getChapterNumber(b.title);
+    });
 
     return (
         <div className="min-h-screen bg-[#141414] pb-20">
@@ -141,49 +210,105 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                 <div className="mt-4">
                     {activeTab === 'local' ? (
                         <div className="flex flex-col gap-2">
-                            <button
-                                onClick={() => fileInputRef.current?.click()}
-                                className="w-full bg-[#2f2f2f] text-white font-bold py-3 rounded flex items-center justify-center gap-2 mb-4 hover:bg-[#3f3f3f] transition-colors"
-                                disabled={isImporting}
-                            >
-                                <Plus size={20} /> {isImporting ? '...' : 'IMPORT CBZ FILE'}
-                            </button>
-
-                            {(() => {
-                                const getChapterNumber = (title: string): number => {
-                                    const match = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
-                                    return match ? parseFloat(match[1] || match[0]) : 0;
-                                };
-
-                                const sortedChapters = [...manga.chapters].sort((a, b) => {
-                                    return getChapterNumber(a.title) - getChapterNumber(b.title);
-                                });
-
-                                return sortedChapters.map((chapter, index) => (
-                                    <div
-                                        key={chapter.id}
-                                        className="flex items-center justify-between p-4 bg-[#1f1f1f] rounded active:bg-[#2f2f2f] transition-colors cursor-pointer group"
-                                        onClick={() => handleReadChapter(chapter)}
+                            {isSelectionMode ? (
+                                <button
+                                    onClick={handleBulkDelete}
+                                    className="w-full bg-red-600 text-white font-bold py-3 rounded flex items-center justify-center gap-2 mb-4 hover:bg-red-700 transition-colors shadow-lg shadow-red-900/20"
+                                >
+                                    <Trash2 size={20} /> DELETE {selectedChapters.size} SELECTED
+                                </button>
+                            ) : (
+                                <div className="flex gap-3 mb-4">
+                                    <button
+                                        onClick={() => {
+                                            if (manga.lastReadChapterId) {
+                                                const chapter = manga.chapters.find(c => c.id === manga.lastReadChapterId);
+                                                if (chapter) {
+                                                    handleReadChapter(chapter); // handleReadChapter now handles loading
+                                                }
+                                            } else if (sortedChapters.length > 0) {
+                                                handleReadChapter(sortedChapters[0]);
+                                            }
+                                        }}
+                                        className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"
                                     >
-                                        <div className="flex items-center gap-4">
-                                            <span className="text-gray-500 font-mono text-sm">#{index + 1}</span>
-                                            <span className="font-medium text-gray-200 text-sm">{chapter.title}</span>
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setDeleteConfirmation(chapter);
-                                                }}
-                                                className="p-2 text-gray-500 hover:text-red-500 transition-colors"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
-                                            <Play size={14} className="text-gray-500" />
+                                        <Play size={20} fill="currentColor" />
+                                        {manga.lastReadChapterId ? 'Resume' : 'Start Reading'}
+                                    </button>
+                                    <button
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="px-4 bg-[#333] text-white rounded-xl font-bold hover:bg-[#444] transition-colors"
+                                        disabled={isImporting}
+                                    >
+                                        <Plus size={24} />
+                                    </button>
+                                </div>
+                            )}
+
+                            {sortedChapters.map((chapter) => (
+                                <div
+                                    key={chapter.id}
+                                    className={`flex items-center justify-between p-4 rounded transition-colors cursor-pointer group select-none
+                                        ${selectedChapters.has(chapter.id) ? 'bg-red-900/20 border border-red-900/50' : 'bg-[#1f1f1f] active:bg-[#2f2f2f]'}`}
+                                    onClick={() => {
+                                        if (isSelectionMode) {
+                                            toggleSelection(chapter.id);
+                                        } else {
+                                            handleReadChapter(chapter);
+                                        }
+                                    }}
+                                    onContextMenu={(e) => {
+                                        e.preventDefault();
+                                        handleLongPress(chapter.id);
+                                    }}
+                                    onTouchStart={() => {
+                                        longPressTimer.current = setTimeout(() => handleLongPress(chapter.id), 500);
+                                    }}
+                                    onTouchEnd={() => {
+                                        if (longPressTimer.current) {
+                                            clearTimeout(longPressTimer.current);
+                                        }
+                                    }}
+                                >
+                                    <div className="flex items-center gap-4">
+                                        {isSelectionMode && (
+                                            <div className={`w-5 h-5 rounded border flex items-center justify-center
+                                                ${selectedChapters.has(chapter.id) ? 'bg-red-600 border-red-600' : 'border-gray-600'}`}>
+                                                {selectedChapters.has(chapter.id) && <Check size={14} className="text-white" />}
+                                            </div>
+                                        )}
+                                        <div className="flex flex-col">
+                                            <span className={`font-medium text-sm ${manga.lastReadChapterId === chapter.id ? 'text-blue-400' : 'text-gray-200'}`}>
+                                                {chapter.title}
+                                            </span>
+                                            <div className="flex gap-2">
+                                                {manga.readChapters?.includes(chapter.id) && (
+                                                    <span className="text-[10px] text-green-500 font-bold uppercase tracking-wide">Read</span>
+                                                )}
+                                                {manga.lastReadChapterId === chapter.id && !manga.readChapters?.includes(chapter.id) && (
+                                                    <span className="text-[10px] text-blue-400/80 font-bold uppercase tracking-wide">Last Read</span>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
-                                ));
-                            })()}
+                                    <div className="flex items-center gap-3">
+                                        {!isSelectionMode && (
+                                            <>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setDeleteConfirmation(chapter);
+                                                    }}
+                                                    className="p-2 text-gray-500 hover:text-red-500 transition-colors"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                                <Play size={14} className="text-gray-500" />
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
                             {manga.chapters.length === 0 && (
                                 <div className="text-center py-8 text-gray-500 text-sm bg-[#1f1f1f] rounded border border-dashed border-gray-800">
                                     No chapters yet.
@@ -194,7 +319,12 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                         <OnlineChapterList
                             mangaTitle={manga.title}
                             currentManga={manga}
-                            onChapterDownloaded={onUpdateManga}
+                            cachedChapters={cachedOnlineChapters}
+                            onCacheUpdate={setCachedOnlineChapters}
+                            downloadQueue={downloadQueue}
+                            activeDownloads={activeDownloads}
+                            downloadProgress={downloadProgress}
+                            onQueueDownload={onQueueDownload}
                         />
                     )}
                 </div>
@@ -269,6 +399,32 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                 className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
                             >
                                 Remove
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom Confirmation Modal for Bulk Delete */}
+            {showBulkDeleteConfirmation && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
+                        <h3 className="text-lg font-bold text-white mb-2">Delete Chapters?</h3>
+                        <p className="text-gray-400 mb-6">
+                            Are you sure you want to delete <span className="text-white font-bold">{selectedChapters.size}</span> selected chapters? This action cannot be undone.
+                        </p>
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => setShowBulkDeleteConfirmation(false)}
+                                className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmBulkDelete}
+                                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
+                            >
+                                Delete All
                             </button>
                         </div>
                     </div>

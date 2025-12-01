@@ -12,7 +12,19 @@ export const DownloadService = {
     ): Promise<string> => {
         try {
             // 1. Get image URLs
-            const imageUrls = await fetchPages();
+            // 1. Get image URLs with timeout
+            const fetchPagesWithTimeout = async () => {
+                let timeoutHandle: NodeJS.Timeout;
+                const timeoutPromise = new Promise<never>((_, reject) => {
+                    timeoutHandle = setTimeout(() => reject(new Error('Page fetch timed out')), 10000); // 10s timeout for fetching list
+                });
+                return Promise.race([fetchPages(), timeoutPromise]).then(res => {
+                    clearTimeout(timeoutHandle);
+                    return res;
+                });
+            };
+
+            const imageUrls = await fetchPagesWithTimeout();
             if (imageUrls.length === 0) throw new Error("No pages found");
 
             const zip = new JSZip();
@@ -20,50 +32,72 @@ export const DownloadService = {
 
             // 2. Download each image
             // 2. Download each image in batches to avoid rate limiting and network congestion
-            const BATCH_SIZE = 5;
+            const BATCH_SIZE = 6;
             for (let i = 0; i < imageUrls.length; i += BATCH_SIZE) {
                 const batch = imageUrls.slice(i, i + BATCH_SIZE);
                 await Promise.all(batch.map(async (url, batchIndex) => {
                     const index = i + batchIndex;
-                    try {
-                        let blob: Blob;
+                    let retries = 3;
+                    while (retries > 0) {
+                        try {
+                            let blob: Blob;
 
-                        // Use CapacitorHttp if headers are needed (Webtoon), otherwise standard fetch (MangaDex)
-                        if (Object.keys(headers).length > 0) {
-                            const response = await CapacitorHttp.get({
-                                url: url,
-                                headers: headers,
-                                responseType: 'blob'
-                            });
 
-                            const base64 = response.data;
-                            const byteCharacters = atob(base64);
-                            const byteNumbers = new Array(byteCharacters.length);
-                            for (let k = 0; k < byteCharacters.length; k++) {
-                                byteNumbers[k] = byteCharacters.charCodeAt(k);
+
+                            // Use CapacitorHttp if headers are needed (Webtoon), otherwise standard fetch (MangaDex)
+                            if (Object.keys(headers).length > 0) {
+                                // CapacitorHttp doesn't support AbortSignal yet, so we rely on its internal timeout
+                                const response = await CapacitorHttp.get({
+                                    url: url,
+                                    headers: headers,
+                                    responseType: 'blob',
+                                    connectTimeout: 5000,
+                                    readTimeout: 5000
+                                });
+
+                                const base64 = response.data;
+                                const byteCharacters = atob(base64);
+                                const byteNumbers = new Array(byteCharacters.length);
+                                for (let k = 0; k < byteCharacters.length; k++) {
+                                    byteNumbers[k] = byteCharacters.charCodeAt(k);
+                                }
+                                const byteArray = new Uint8Array(byteNumbers);
+                                blob = new Blob([byteArray], { type: 'image/jpeg' });
+                            } else {
+                                // Standard fetch with AbortController
+                                const controller = new AbortController();
+                                const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+
+                                try {
+                                    const response = await fetch(url, { signal: controller.signal });
+                                    clearTimeout(timeoutId);
+                                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                                    blob = await response.blob();
+                                } catch (fetchErr) {
+                                    clearTimeout(timeoutId);
+                                    throw fetchErr;
+                                }
                             }
-                            const byteArray = new Uint8Array(byteNumbers);
-                            blob = new Blob([byteArray], { type: 'image/jpeg' });
-                        } else {
-                            const response = await fetch(url);
-                            blob = await response.blob();
+
+                            let extension = 'jpg';
+                            if (url.includes('.png')) extension = 'png';
+                            if (url.includes('.webp')) extension = 'webp';
+
+                            const filename = `${String(index + 1).padStart(3, '0')}.${extension}`;
+
+                            zip.file(filename, blob);
+
+                            completed++;
+                            if (onProgress) {
+                                onProgress((completed / imageUrls.length) * 0.8);
+                            }
+                            break; // Success, exit retry loop
+                        } catch (err) {
+                            console.error(`Failed to download page ${index + 1}, retries left: ${retries - 1}`, err);
+                            retries--;
+                            if (retries === 0) throw err;
+                            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
                         }
-
-                        let extension = 'jpg';
-                        if (url.includes('.png')) extension = 'png';
-                        if (url.includes('.webp')) extension = 'webp';
-
-                        const filename = `${String(index + 1).padStart(3, '0')}.${extension}`;
-
-                        zip.file(filename, blob);
-
-                        completed++;
-                        if (onProgress) {
-                            onProgress((completed / imageUrls.length) * 0.8);
-                        }
-                    } catch (err) {
-                        console.error(`Failed to download page ${index + 1}`, err);
-                        throw err;
                     }
                 }));
             }

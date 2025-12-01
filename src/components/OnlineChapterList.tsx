@@ -3,27 +3,37 @@ import { MangaPillService } from '../services/MangaPillService';
 import type { MangaPillChapter } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
 import type { WebtoonChapter } from '../services/WebtoonService';
-import { DownloadService } from '../services/DownloadService';
-import { StorageService } from '../services/StorageService';
-import type { Manga, Chapter } from '../services/StorageService';
+import type { Manga } from '../services/StorageService';
 import { Download, Loader2, Check, RefreshCw, ChevronDown } from 'lucide-react';
 
 interface OnlineChapterListProps {
     mangaTitle: string;
     currentManga: Manga;
-    onChapterDownloaded: (updatedManga: Manga) => void;
+    cachedChapters?: (MangaPillChapter | WebtoonChapter)[];
+    onCacheUpdate?: (chapters: (MangaPillChapter | WebtoonChapter)[]) => void;
+    // Download props
+    downloadQueue: string[];
+    activeDownloads: string[];
+    downloadProgress: Record<string, number>;
+    onQueueDownload: (chapter: any, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => void;
 }
 
 type Source = 'mangapill' | 'webtoon';
 
-export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle, currentManga, onChapterDownloaded }) => {
-    const [chapters, setChapters] = useState<(MangaPillChapter | WebtoonChapter)[]>([]);
+export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
+    mangaTitle,
+    currentManga,
+    cachedChapters = [],
+    onCacheUpdate,
+    downloadQueue,
+    activeDownloads,
+    downloadProgress,
+    onQueueDownload
+}) => {
+    const [chapters, setChapters] = useState<(MangaPillChapter | WebtoonChapter)[]>(cachedChapters);
     const [loading, setLoading] = useState(false);
     const [loadingProgress, setLoadingProgress] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
-    const [downloadingId, setDownloadingId] = useState<string | null>(null);
-    const [progress, setProgress] = useState(0);
-
 
     // Determine if we should show Webtoon tab
     const isWebtoon = currentManga.type === 'Manhwa' ||
@@ -39,6 +49,8 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
 
     // Webtoon specific state
     const [currentMangaId, setCurrentMangaId] = useState<string | null>(null);
+    const [webtoonMaxPage, setWebtoonMaxPage] = useState(0);
+    const [webtoonMangaUrl, setWebtoonMangaUrl] = useState<string | undefined>(undefined);
 
     const [selectedBatch, setSelectedBatch] = useState(0);
     const [isBatchDropdownOpen, setIsBatchDropdownOpen] = useState(false);
@@ -48,8 +60,16 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
 
     useEffect(() => {
         sourceRef.current = source;
-        loadChapters();
+        if (chapters.length === 0) {
+            loadChapters();
+        }
     }, [source]);
+
+    useEffect(() => {
+        if (onCacheUpdate && chapters.length > 0 && source === 'mangapill') {
+            onCacheUpdate(chapters);
+        }
+    }, [chapters]);
 
     // Reset visible count when chapters change or batch changes
     useEffect(() => {
@@ -76,6 +96,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
         setVisibleCount(20);
         setSelectedBatch(0);
         setCurrentMangaId(null);
+        setWebtoonMaxPage(0);
 
         try {
             if (currentSource === 'mangapill') {
@@ -110,8 +131,9 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
                 });
 
                 setChapters(chapterList);
+                setLoading(false);
             } else {
-                // Webtoon Logic - Fetch ALL chapters
+                // Webtoon Logic - Lazy Load
                 const searchResults = await WebtoonService.searchManga(mangaTitle);
 
                 if (sourceRef.current !== currentSource) return;
@@ -127,138 +149,105 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
                 const mangaUrl = firstResult.url;
 
                 setCurrentMangaId(mangaId);
+                setWebtoonMangaUrl(mangaUrl);
 
                 // 1. Fetch Page 9999 to get the max page (oldest chapters)
                 const lastPageResult = await WebtoonService.getChapters(mangaId, 9999, mangaUrl);
                 if (sourceRef.current !== currentSource) return;
 
-                let allChapters: WebtoonChapter[] = [...lastPageResult.chapters];
-                const maxPage = lastPageResult.currentPage; // This is the true last page number
+                const maxPage = lastPageResult.currentPage;
+                setWebtoonMaxPage(maxPage);
 
-                if (maxPage > 1) {
-                    // 2. Fetch all other pages in parallel batches
-                    const pagesToFetch = [];
-                    // We already have maxPage, so fetch 1 to maxPage-1
-                    for (let p = maxPage - 1; p >= 1; p--) {
-                        pagesToFetch.push(p);
-                    }
-
-                    const chunkSize = 5; // Fetch 5 pages at a time
-                    for (let i = 0; i < pagesToFetch.length; i += chunkSize) {
-                        if (sourceRef.current !== currentSource) return;
-
-                        const chunk = pagesToFetch.slice(i, i + chunkSize);
-                        setLoadingProgress(`Loading chapters... ${Math.round((i / pagesToFetch.length) * 100)}%`);
-
-                        const results = await Promise.all(
-                            chunk.map(p => WebtoonService.getChapters(mangaId, p, mangaUrl))
-                        );
-
-                        results.forEach(res => {
-                            allChapters = [...allChapters, ...res.chapters];
-                        });
-                    }
-                }
-
-                // Deduplicate
-                allChapters = allChapters.filter((ch, index, self) =>
-                    index === self.findIndex((t) => t.id === ch.id)
-                );
-
-                // Sort ascending
-                allChapters.sort((a, b) => parseInt(a.id) - parseInt(b.id));
-                setChapters(allChapters);
+                // Trigger batch load for batch 0
+                loadWebtoonBatch(0, maxPage, mangaId, mangaUrl);
             }
 
         } catch (err) {
             console.error(err);
             if (sourceRef.current === currentSource) {
                 setError("Failed to load chapters.");
-            }
-        } finally {
-            if (sourceRef.current === currentSource) {
                 setLoading(false);
-                setLoadingProgress('');
             }
         }
     };
 
-    const handleDownload = async (chapter: MangaPillChapter | WebtoonChapter) => {
-        if (downloadingId) return;
-
-        setDownloadingId(chapter.id);
-        setProgress(0);
+    const loadWebtoonBatch = async (batchIndex: number, maxPage: number, mangaId: string, mangaUrl: string) => {
+        setLoading(true);
+        setLoadingProgress('Loading batch...');
+        setChapters([]); // Clear current list while loading new batch
 
         try {
-            let fileName: string;
-            let chapterTitle: string;
+            // Calculate pages for this batch
+            // Batch 0 = Oldest (Chapters 1-100) -> Pages maxPage down to maxPage-9
+            // Batch 1 = Next (Chapters 101-200) -> Pages maxPage-10 down to maxPage-19
 
-            if (source === 'mangapill') {
-                const c = chapter as MangaPillChapter;
-                chapterTitle = c.title;
-                fileName = await DownloadService.downloadChapter(
-                    chapterTitle,
-                    mangaTitle,
-                    () => MangaPillService.getChapterPages(c.url),
-                    { 'Referer': 'https://mangapill.com/' },
-                    (p: number) => setProgress(p)
-                );
-            } else {
-                const c = chapter as WebtoonChapter;
-                chapterTitle = c.title;
+            const startPage = maxPage - (batchIndex * 10);
+            const endPage = Math.max(1, startPage - 9);
 
-                let mangaId = currentMangaId;
-                if (!mangaId) {
-                    const searchResults = await WebtoonService.searchManga(mangaTitle);
-                    if (searchResults.length > 0) {
-                        mangaId = searchResults[0].id;
-                        setCurrentMangaId(mangaId);
-                    } else {
-                        throw new Error("Manga ID not found");
-                    }
-                }
-
-                fileName = await DownloadService.downloadChapter(
-                    chapterTitle,
-                    mangaTitle,
-                    () => WebtoonService.getChapterPages(mangaId!, c.id),
-                    { 'Referer': 'https://www.webtoons.com/' },
-                    (p: number) => setProgress(p)
-                );
+            if (startPage < 1) {
+                setLoading(false);
+                return;
             }
 
-            const newChapter: Chapter = {
-                id: Date.now().toString(),
-                title: chapterTitle,
-                fileName: fileName
-            };
+            const pagesToFetch = [];
+            for (let p = startPage; p >= endPage; p--) {
+                pagesToFetch.push(p);
+            }
 
-            const updatedManga = {
-                ...currentManga,
-                chapters: [...currentManga.chapters, newChapter]
-            };
+            let batchChaptersList: WebtoonChapter[] = [];
 
-            const library = await StorageService.loadLibrary();
-            const newLibrary = library.map(m => m.id === currentManga.id ? updatedManga : m);
-            await StorageService.saveLibrary(newLibrary);
+            const chunkSize = 5;
+            for (let i = 0; i < pagesToFetch.length; i += chunkSize) {
+                if (sourceRef.current !== 'webtoon') return;
 
-            onChapterDownloaded(updatedManga);
+                const chunk = pagesToFetch.slice(i, i + chunkSize);
+                const results = await Promise.all(
+                    chunk.map(p => WebtoonService.getChapters(mangaId, p, mangaUrl))
+                );
+
+                results.forEach(res => {
+                    batchChaptersList = [...batchChaptersList, ...res.chapters];
+                });
+            }
+
+            // Deduplicate
+            batchChaptersList = batchChaptersList.filter((ch, index, self) =>
+                index === self.findIndex((t) => t.id === ch.id)
+            );
+
+            // Sort ascending
+            batchChaptersList.sort((a, b) => parseInt(a.id) - parseInt(b.id));
+            setChapters(batchChaptersList);
 
         } catch (err) {
-            console.error("Download failed", err);
-            alert("Download failed. Check your internet connection.");
+            console.error("Error loading webtoon batch", err);
+            setError("Failed to load batch.");
         } finally {
-            setDownloadingId(null);
-            setProgress(0);
+            setLoading(false);
+            setLoadingProgress('');
         }
+    };
+
+    // Handle Batch Selection for Webtoon
+    useEffect(() => {
+        if (source === 'webtoon' && currentMangaId && webtoonMaxPage > 0 && webtoonMangaUrl) {
+            loadWebtoonBatch(selectedBatch, webtoonMaxPage, currentMangaId, webtoonMangaUrl);
+        }
+    }, [selectedBatch]); // Don't include others to avoid loops, only trigger on user selection
+
+    const handleDownload = (chapter: MangaPillChapter | WebtoonChapter) => {
+        if (downloadQueue.includes(chapter.id) || activeDownloads.includes(chapter.id)) return;
+        onQueueDownload(chapter, mangaTitle, source, currentMangaId || undefined);
     };
 
     const isDownloaded = (chapter: MangaPillChapter | WebtoonChapter) => {
         return currentManga.chapters.some(ch => ch.title === chapter.title);
     };
 
-    // Filter chapters based on batch
+    // Filter chapters based on batch (ONLY FOR MANGAPILL)
     const getBatchChapters = () => {
+        if (source === 'webtoon') return chapters; // Webtoon already loads only the batch
+
         if (chapters.length <= BATCH_THRESHOLD) return chapters;
         const start = selectedBatch * BATCH_SIZE;
         const end = start + BATCH_SIZE;
@@ -302,32 +291,34 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
     const displayedChapters = batchChapters.slice(0, visibleCount);
 
     // Calculate batches
-    const totalBatches = Math.ceil(chapters.length / BATCH_SIZE);
-    const batches = Array.from({ length: totalBatches }, (_, i) => {
-        const start = i * BATCH_SIZE;
-        const end = Math.min((i + 1) * BATCH_SIZE - 1, chapters.length - 1);
+    let batches: { index: number, label: string }[] = [];
 
-        let startLabel = `${start + 1}`;
-        let endLabel = `${end + 1}`;
-
-        // Helper to get chapter number safely
-        const getChapNum = (idx: number) => {
-            const ch = chapters[idx];
-            if (source === 'mangapill' && 'number' in ch) return (ch as MangaPillChapter).number;
-            return null;
-        };
-
-        const sNum = getChapNum(start);
-        const eNum = getChapNum(end);
-
-        if (sNum) startLabel = sNum;
-        if (eNum) endLabel = eNum;
-
-        return {
-            index: i,
-            label: `${startLabel} - ${endLabel}`
-        };
-    });
+    if (source === 'mangapill') {
+        const totalBatches = Math.ceil(chapters.length / BATCH_SIZE);
+        batches = Array.from({ length: totalBatches }, (_, i) => {
+            const start = i * BATCH_SIZE;
+            const end = Math.min((i + 1) * BATCH_SIZE - 1, chapters.length - 1);
+            const sNum = (chapters[start] as MangaPillChapter).number;
+            const eNum = (chapters[end] as MangaPillChapter).number;
+            return {
+                index: i,
+                label: `${sNum} - ${eNum}`
+            };
+        });
+    } else {
+        // Webtoon Batches based on Max Page
+        // 1 page = 10 chapters. 1 batch = 10 pages = 100 chapters.
+        const totalBatches = Math.ceil(webtoonMaxPage / 10);
+        batches = Array.from({ length: totalBatches }, (_, i) => {
+            // Estimate chapter numbers
+            const startChap = (i * 100) + 1;
+            const endChap = (i + 1) * 100;
+            return {
+                index: i,
+                label: `${startChap} - ${endChap}`
+            };
+        });
+    }
 
     return (
         <div className="flex flex-col h-full">
@@ -352,14 +343,14 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
             </div>
 
             {/* Custom Batch Selector */}
-            {chapters.length > BATCH_THRESHOLD && (
+            {(chapters.length > BATCH_THRESHOLD || (source === 'webtoon' && webtoonMaxPage > 10)) && (
                 <div className="mb-4 px-1 relative" ref={batchDropdownRef}>
                     <button
                         onClick={() => setIsBatchDropdownOpen(!isBatchDropdownOpen)}
                         className="w-full bg-[#1f1f1f] text-white p-3 rounded-lg text-sm border border-gray-800 flex justify-between items-center hover:bg-[#2a2a2a] transition-colors"
                     >
                         <span className="font-medium text-gray-200">
-                            Chapters {batches[selectedBatch]?.label}
+                            Chapters {batches[selectedBatch]?.label || 'Loading...'}
                         </span>
                         <ChevronDown size={16} className={`text-gray-400 transition-transform ${isBatchDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
@@ -415,7 +406,10 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
                             if (source === 'mangapill' && !('url' in chapter)) return null;
 
                             const downloaded = isDownloaded(chapter);
-                            const isDownloading = downloadingId === (chapter.id);
+                            const isActive = activeDownloads.includes(chapter.id);
+                            const isQueued = downloadQueue.includes(chapter.id);
+                            const isDownloading = isActive || isQueued;
+                            const progress = downloadProgress[chapter.id] || 0;
 
                             return (
                                 <div key={chapter.id} className="flex items-center justify-between p-3 bg-[#1f1f1f] rounded hover:bg-[#2f2f2f] transition-colors">
@@ -431,12 +425,16 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
                                     ) : (
                                         <button
                                             onClick={() => handleDownload(chapter)}
-                                            disabled={!!downloadingId}
+                                            disabled={isDownloading}
                                             className={`p-2 rounded-full transition-colors ${isDownloading ? 'bg-gray-700' : 'bg-[#333] hover:bg-[#444] text-white'}`}
                                         >
-                                            {isDownloading ? (
+                                            {isActive ? (
                                                 <div className="flex items-center justify-center w-5 h-5">
                                                     <span className="text-[9px] font-bold text-white">{Math.round(progress * 100)}%</span>
+                                                </div>
+                                            ) : isQueued ? (
+                                                <div className="flex items-center justify-center w-5 h-5">
+                                                    <Loader2 size={14} className="animate-spin text-gray-400" />
                                                 </div>
                                             ) : (
                                                 <Download size={16} />
@@ -457,4 +455,3 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({ mangaTitle
         </div>
     );
 };
-
