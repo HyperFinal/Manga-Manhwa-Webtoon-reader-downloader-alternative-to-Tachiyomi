@@ -28,11 +28,32 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
     // Cache for online chapters to prevent reloading on tab switch
     const [cachedOnlineChapters, setCachedOnlineChapters] = useState<any[]>([]);
 
+    // View State for Online Tab (Lifted State)
+    const [onlineViewState, setOnlineViewState] = useState<any>({
+        selectedBatch: 0,
+        currentMangaId: null,
+        webtoonMaxPage: 0,
+        webtoonMangaUrl: undefined,
+        source: undefined // Will be set by component
+    });
+
     // Reset cache and tab when manga changes
     useEffect(() => {
         setCachedOnlineChapters([]);
+        setOnlineViewState({
+            selectedBatch: 0,
+            currentMangaId: null,
+            webtoonMaxPage: 0,
+            webtoonMangaUrl: undefined,
+            source: undefined
+        });
         setActiveTab('local');
     }, [manga.id]);
+
+    // DEBUG: Log manga updates
+    useEffect(() => {
+        console.log(`[MangaDetails] Manga prop updated. Read chapters: ${manga.readChapters?.length}`);
+    }, [manga]);
 
     // Multi-select state
     const [selectedChapters, setSelectedChapters] = useState<Set<string>>(new Set());
@@ -136,7 +157,7 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
     });
 
     return (
-        <div className="min-h-screen bg-[#141414] pb-20">
+        <div className="h-full overflow-y-auto bg-[#141414] pb-20 custom-scrollbar">
             {/* Header Image */}
             <div className="relative h-64 w-full">
                 <div className="absolute inset-0">
@@ -167,6 +188,14 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                             </span>
                         </div>
                         <p className="text-xs text-gray-500 mt-1">{manga.chapters.length} downloaded</p>
+                        {/* DEBUG: Show read chapters count (Uncomment to debug) */}
+                        {/* <p className="text-[10px] text-red-500 mt-1 font-mono">
+                            Read: {manga.readChapters?.length || 0} ({manga.readChapters?.slice(-3).join(', ')})
+                            <br />
+                            First Chap ID: {manga.chapters[0]?.id}
+                            <br />
+                            Is First Read: {manga.readChapters?.includes(manga.chapters[0]?.id) ? 'YES' : 'NO'}
+                        </p> */}
                     </div>
                 </div>
 
@@ -282,12 +311,25 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                                 {chapter.title}
                                             </span>
                                             <div className="flex gap-2">
-                                                {manga.readChapters?.includes(chapter.id) && (
-                                                    <span className="text-[10px] text-green-500 font-bold uppercase tracking-wide">Read</span>
-                                                )}
-                                                {manga.lastReadChapterId === chapter.id && !manga.readChapters?.includes(chapter.id) && (
-                                                    <span className="text-[10px] text-blue-400/80 font-bold uppercase tracking-wide">Last Read</span>
-                                                )}
+                                                {(manga.readChapters?.includes(chapter.id) ||
+                                                    manga.readChapters?.some(readId => {
+                                                        const readChapter = manga.chapters.find(c => c.id === readId);
+                                                        const isMatch = readChapter?.title === chapter.title;
+                                                        if (!isMatch && readChapter && Math.random() < 0.0001) {
+                                                            console.log(`[MangaDetails] Check: '${readChapter.title}' vs '${chapter.title}'`);
+                                                        }
+                                                        return isMatch;
+                                                    })) && (
+                                                        <span className="text-[10px] text-green-500 font-bold uppercase tracking-wide">Read</span>
+                                                    )}
+                                                {manga.lastReadChapterId === chapter.id &&
+                                                    !manga.readChapters?.includes(chapter.id) &&
+                                                    !manga.readChapters?.some(readId => {
+                                                        const readChapter = manga.chapters.find(c => c.id === readId);
+                                                        return readChapter?.title === chapter.title;
+                                                    }) && (
+                                                        <span className="text-[10px] text-blue-400/80 font-bold uppercase tracking-wide">Last Read</span>
+                                                    )}
                                             </div>
                                         </div>
                                     </div>
@@ -321,6 +363,8 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                             currentManga={manga}
                             cachedChapters={cachedOnlineChapters}
                             onCacheUpdate={setCachedOnlineChapters}
+                            viewState={onlineViewState}
+                            onViewStateChange={(newState) => setOnlineViewState((prev: any) => ({ ...prev, ...newState }))}
                             downloadQueue={downloadQueue}
                             activeDownloads={activeDownloads}
                             downloadProgress={downloadProgress}
@@ -339,97 +383,103 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
             />
 
             {/* Custom Confirmation Modal for Chapter Delete */}
-            {deleteConfirmation && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                    <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
-                        <h3 className="text-lg font-bold text-white mb-2">Delete Chapter?</h3>
-                        <p className="text-gray-400 mb-6">
-                            Are you sure you want to delete <span className="text-white font-medium">"{deleteConfirmation.title}"</span>? This action cannot be undone.
-                        </p>
-                        <div className="flex justify-end gap-3">
-                            <button
-                                onClick={() => setDeleteConfirmation(null)}
-                                className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={() => {
-                                    if (deleteConfirmation) {
-                                        StorageService.deleteChapterFile(deleteConfirmation.fileName).then(async () => {
-                                            const updatedChapters = manga.chapters.filter(c => c.id !== deleteConfirmation.id);
-                                            const updatedManga = { ...manga, chapters: updatedChapters };
-                                            const library = await StorageService.loadLibrary();
-                                            const newLibrary = library.map(m => m.id === manga.id ? updatedManga : m);
-                                            await StorageService.saveLibrary(newLibrary);
-                                            onUpdateManga(updatedManga);
-                                            setDeleteConfirmation(null);
-                                        });
-                                    }
-                                }}
-                                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
-                            >
-                                Delete
-                            </button>
+            {
+                deleteConfirmation && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
+                            <h3 className="text-lg font-bold text-white mb-2">Delete Chapter?</h3>
+                            <p className="text-gray-400 mb-6">
+                                Are you sure you want to delete <span className="text-white font-medium">"{deleteConfirmation.title}"</span>? This action cannot be undone.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    onClick={() => setDeleteConfirmation(null)}
+                                    className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (deleteConfirmation) {
+                                            StorageService.deleteChapterFile(deleteConfirmation.fileName).then(async () => {
+                                                const updatedChapters = manga.chapters.filter(c => c.id !== deleteConfirmation.id);
+                                                const updatedManga = { ...manga, chapters: updatedChapters };
+                                                const library = await StorageService.loadLibrary();
+                                                const newLibrary = library.map(m => m.id === manga.id ? updatedManga : m);
+                                                await StorageService.saveLibrary(newLibrary);
+                                                onUpdateManga(updatedManga);
+                                                setDeleteConfirmation(null);
+                                            });
+                                        }
+                                    }}
+                                    className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
+                                >
+                                    Delete
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Custom Confirmation Modal for Manga Remove */}
-            {showRemoveConfirmation && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                    <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
-                        <h3 className="text-lg font-bold text-white mb-2">Remove Manga?</h3>
-                        <p className="text-gray-400 mb-6">
-                            Are you sure you want to remove <span className="text-white font-medium">"{manga.title}"</span> from your library? All downloaded chapters will be deleted.
-                        </p>
-                        <div className="flex justify-end gap-3">
-                            <button
-                                onClick={() => setShowRemoveConfirmation(false)}
-                                className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={() => {
-                                    onRemove();
-                                    setShowRemoveConfirmation(false);
-                                }}
-                                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
-                            >
-                                Remove
-                            </button>
+            {
+                showRemoveConfirmation && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
+                            <h3 className="text-lg font-bold text-white mb-2">Remove Manga?</h3>
+                            <p className="text-gray-400 mb-6">
+                                Are you sure you want to remove <span className="text-white font-medium">"{manga.title}"</span> from your library? All downloaded chapters will be deleted.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    onClick={() => setShowRemoveConfirmation(false)}
+                                    className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        onRemove();
+                                        setShowRemoveConfirmation(false);
+                                    }}
+                                    className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
+                                >
+                                    Remove
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Custom Confirmation Modal for Bulk Delete */}
-            {showBulkDeleteConfirmation && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                    <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
-                        <h3 className="text-lg font-bold text-white mb-2">Delete Chapters?</h3>
-                        <p className="text-gray-400 mb-6">
-                            Are you sure you want to delete <span className="text-white font-bold">{selectedChapters.size}</span> selected chapters? This action cannot be undone.
-                        </p>
-                        <div className="flex justify-end gap-3">
-                            <button
-                                onClick={() => setShowBulkDeleteConfirmation(false)}
-                                className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={confirmBulkDelete}
-                                className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
-                            >
-                                Delete All
-                            </button>
+            {
+                showBulkDeleteConfirmation && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-[#1f1f1f] rounded-lg shadow-2xl max-w-sm w-full p-6 border border-[#333]">
+                            <h3 className="text-lg font-bold text-white mb-2">Delete Chapters?</h3>
+                            <p className="text-gray-400 mb-6">
+                                Are you sure you want to delete <span className="text-white font-bold">{selectedChapters.size}</span> selected chapters? This action cannot be undone.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    onClick={() => setShowBulkDeleteConfirmation(false)}
+                                    className="px-4 py-2 rounded text-gray-300 hover:text-white hover:bg-[#333] transition-colors font-medium"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={confirmBulkDelete}
+                                    className="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 transition-colors font-bold shadow-lg shadow-red-900/20"
+                                >
+                                    Delete All
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 };

@@ -4,7 +4,7 @@ import type { MangaPillChapter } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
 import type { WebtoonChapter } from '../services/WebtoonService';
 import type { Manga } from '../services/StorageService';
-import { Download, Loader2, Check, RefreshCw, ChevronDown } from 'lucide-react';
+import { Check, RefreshCw, ChevronDown, Loader2, Download } from 'lucide-react';
 
 interface OnlineChapterListProps {
     mangaTitle: string;
@@ -18,13 +18,37 @@ interface OnlineChapterListProps {
     onQueueDownload: (chapter: any, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => void;
 }
 
-type Source = 'mangapill' | 'webtoon';
+
+export interface OnlineViewState {
+    selectedBatch: number;
+    currentMangaId: string | null;
+    webtoonMaxPage: number;
+    webtoonMangaUrl: string | undefined;
+    source: 'mangapill' | 'webtoon';
+}
+
+interface OnlineChapterListProps {
+    mangaTitle: string;
+    currentManga: Manga;
+    cachedChapters?: (MangaPillChapter | WebtoonChapter)[];
+    onCacheUpdate?: (chapters: (MangaPillChapter | WebtoonChapter)[]) => void;
+    // View State
+    viewState: OnlineViewState;
+    onViewStateChange: (newState: Partial<OnlineViewState>) => void;
+    // Download props
+    downloadQueue: string[];
+    activeDownloads: string[];
+    downloadProgress: Record<string, number>;
+    onQueueDownload: (chapter: any, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => void;
+}
 
 export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     mangaTitle,
     currentManga,
     cachedChapters = [],
     onCacheUpdate,
+    viewState,
+    onViewStateChange,
     downloadQueue,
     activeDownloads,
     downloadProgress,
@@ -35,29 +59,29 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     const [loadingProgress, setLoadingProgress] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
 
-    // Determine if we should show Webtoon tab
-    const isWebtoon = currentManga.type === 'Manhwa' ||
-        currentManga.type === 'Manhua' ||
-        currentManga.genres?.some(g => g.toLowerCase() === 'webtoon');
-
-    // Initialize source based on type
-    const [source] = useState<Source>(() => isWebtoon ? 'webtoon' : 'mangapill');
+    // Destructure view state for easier access
+    const { selectedBatch, currentMangaId, webtoonMaxPage, webtoonMangaUrl, source } = viewState;
 
     const [visibleCount, setVisibleCount] = useState(20);
     const observerTarget = useRef(null);
     const sourceRef = useRef(source);
 
-    // Webtoon specific state
-    const [currentMangaId, setCurrentMangaId] = useState<string | null>(null);
-    const [webtoonMaxPage, setWebtoonMaxPage] = useState(0);
-    const [webtoonMangaUrl, setWebtoonMangaUrl] = useState<string | undefined>(undefined);
-
-    const [selectedBatch, setSelectedBatch] = useState(0);
     const [isBatchDropdownOpen, setIsBatchDropdownOpen] = useState(false);
     const batchDropdownRef = useRef<HTMLDivElement>(null);
     const BATCH_SIZE = 100;
     const BATCH_THRESHOLD = 150;
 
+    // Initialize source if not set (first load)
+    useEffect(() => {
+        if (!viewState.source) {
+            const isWebtoonType = currentManga.type === 'Manhwa' ||
+                currentManga.type === 'Manhua' ||
+                currentManga.genres?.some(g => g.toLowerCase() === 'webtoon');
+            onViewStateChange({ source: isWebtoonType ? 'webtoon' : 'mangapill' });
+        }
+    }, []);
+
+    const isWebtoon = source === 'webtoon';
     useEffect(() => {
         sourceRef.current = source;
         if (chapters.length === 0) {
@@ -66,7 +90,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     }, [source]);
 
     useEffect(() => {
-        if (onCacheUpdate && chapters.length > 0 && source === 'mangapill') {
+        if (onCacheUpdate && chapters.length > 0) {
             onCacheUpdate(chapters);
         }
     }, [chapters]);
@@ -92,11 +116,15 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
         setLoading(true);
         setLoadingProgress('');
         setError(null);
-        setChapters([]);
+
+        // Only reset chapters if we are changing source or don't have them
+        if (currentSource !== sourceRef.current) {
+            setChapters([]);
+        }
+
         setVisibleCount(20);
-        setSelectedBatch(0);
-        setCurrentMangaId(null);
-        setWebtoonMaxPage(0);
+        // Do NOT reset viewState here, as we want to preserve it
+
 
         try {
             if (currentSource === 'mangapill') {
@@ -148,15 +176,17 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                 const mangaId = firstResult.id;
                 const mangaUrl = firstResult.url;
 
-                setCurrentMangaId(mangaId);
-                setWebtoonMangaUrl(mangaUrl);
+                onViewStateChange({
+                    currentMangaId: mangaId,
+                    webtoonMangaUrl: mangaUrl
+                });
 
                 // 1. Fetch Page 9999 to get the max page (oldest chapters)
                 const lastPageResult = await WebtoonService.getChapters(mangaId, 9999, mangaUrl);
                 if (sourceRef.current !== currentSource) return;
 
                 const maxPage = lastPageResult.currentPage;
-                setWebtoonMaxPage(maxPage);
+                onViewStateChange({ webtoonMaxPage: maxPage });
 
                 // Trigger batch load for batch 0
                 loadWebtoonBatch(0, maxPage, mangaId, mangaUrl);
@@ -229,9 +259,16 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     };
 
     // Handle Batch Selection for Webtoon
+    const prevBatchRef = useRef(selectedBatch);
     useEffect(() => {
         if (source === 'webtoon' && currentMangaId && webtoonMaxPage > 0 && webtoonMangaUrl) {
-            loadWebtoonBatch(selectedBatch, webtoonMaxPage, currentMangaId, webtoonMangaUrl);
+            const isBatchChanged = prevBatchRef.current !== selectedBatch;
+            const hasChapters = chapters.length > 0;
+
+            if (isBatchChanged || !hasChapters) {
+                loadWebtoonBatch(selectedBatch, webtoonMaxPage, currentMangaId, webtoonMangaUrl);
+            }
+            prevBatchRef.current = selectedBatch;
         }
     }, [selectedBatch]); // Don't include others to avoid loops, only trigger on user selection
 
@@ -320,6 +357,8 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
         });
     }
 
+    console.log('[OnlineChapterList] Render. Read Chapters:', currentManga.readChapters);
+
     return (
         <div className="flex flex-col h-full">
             <div className="flex justify-between items-center mb-4 px-1">
@@ -361,7 +400,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                                 <button
                                     key={batch.index}
                                     onClick={() => {
-                                        setSelectedBatch(batch.index);
+                                        onViewStateChange({ selectedBatch: batch.index });
                                         setIsBatchDropdownOpen(false);
                                     }}
                                     className={`w-full text-left px-4 py-3 text-sm transition-colors border-b border-gray-800 last:border-0 flex justify-between items-center
@@ -411,10 +450,31 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                             const isDownloading = isActive || isQueued;
                             const progress = downloadProgress[chapter.id] || 0;
 
+                            // Check read status by Title (since IDs differ between online and local)
+                            const isRead = currentManga.readChapters?.includes(chapter.id) ||
+                                currentManga.readChapters?.some(readId => {
+                                    const localChapter = currentManga.chapters.find(c => c.id === readId);
+                                    if (localChapter && localChapter.title === chapter.title) {
+                                        return true;
+                                    }
+                                    // Debug log for mismatch
+                                    if (localChapter && Math.random() < 0.001) { // Throttle logs
+                                        console.log(`[OnlineChapterList] Mismatch: '${localChapter.title}' vs '${chapter.title}'`);
+                                    }
+                                    return false;
+                                });
+
                             return (
                                 <div key={chapter.id} className="flex items-center justify-between p-3 bg-[#1f1f1f] rounded hover:bg-[#2f2f2f] transition-colors">
                                     <div className="flex flex-col">
-                                        <span className="text-gray-200 text-sm font-medium line-clamp-1">{chapter.title}</span>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`text-sm font-medium line-clamp-1 ${isRead ? 'text-gray-500' : 'text-gray-200'}`}>
+                                                {chapter.title}
+                                            </span>
+                                            {isRead && (
+                                                <span className="text-[10px] bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded">READ</span>
+                                            )}
+                                        </div>
                                         {'date' in chapter && <span className="text-gray-500 text-xs">{(chapter as WebtoonChapter).date}</span>}
                                     </div>
 
@@ -449,8 +509,8 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                         <div ref={observerTarget} className="w-full py-4 flex justify-center h-10">
                             {loading && chapters.length > 0 && <Loader2 className="animate-spin text-gray-500" size={20} />}
                         </div>
-                    </div>
-                </div>
+                    </div >
+                </div >
             )}
         </div>
     );

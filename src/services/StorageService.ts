@@ -189,6 +189,7 @@ export const StorageService = {
         }
 
         // Write files
+        let processedCount = 0;
         for (const entry of imageEntries) {
             // Get base64 directly from JSZip to avoid Blob conversion overhead
             const base64Image = await (entry as any).async('base64');
@@ -209,6 +210,12 @@ export const StorageService = {
             });
 
             imagePaths.push(Capacitor.convertFileSrc(uri.uri));
+
+            // Yield to main thread every 5 images to prevent freezing
+            processedCount++;
+            if (processedCount % 5 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
         }
 
         return imagePaths;

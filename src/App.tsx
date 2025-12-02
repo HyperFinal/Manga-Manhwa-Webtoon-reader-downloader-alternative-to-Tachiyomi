@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Home } from './components/Home';
 import { MangaDetails } from './components/MangaDetails';
@@ -188,139 +188,133 @@ function App() {
     }, 50);
   };
 
-  const handleNextChapter = async (): Promise<boolean> => {
-    if (!selectedManga || !currentChapterId) return false;
 
-    // Sort chapters to ensure correct order
-    const getChapterNumber = (title: string): number => {
-      const match = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
-      return match ? parseFloat(match[1] || match[0]) : 0;
-    };
 
-    const sortedChapters = [...selectedManga.chapters].sort((a, b) => {
-      return getChapterNumber(a.title) - getChapterNumber(b.title);
+  const handleProgress = (page: number, _total: number, chapterId?: string) => {
+    const targetChapterId = chapterId || currentChapterId;
+
+    setSelectedManga(prevManga => {
+      if (!prevManga || !targetChapterId) return prevManga;
+
+      // Only update if changed
+      if (prevManga.lastReadChapterId !== targetChapterId || prevManga.lastReadPage !== page) {
+        return {
+          ...prevManga,
+          lastReadChapterId: targetChapterId,
+          lastReadPage: page,
+        };
+      }
+      return prevManga;
     });
-
-    const currentIndex = sortedChapters.findIndex(c => c.id === currentChapterId);
-    if (currentIndex === -1 || currentIndex === sortedChapters.length - 1) return false;
-
-    const nextChapter = sortedChapters[currentIndex + 1];
-    try {
-      // No need to read file content anymore!
-      setInitialPage(0);
-      setReadingChapter({ fileName: nextChapter.fileName, id: nextChapter.id });
-      setCurrentChapterId(nextChapter.id);
-      return true;
-    } catch (error) {
-      console.error("Failed to load next chapter", error);
-      return false;
-    }
-  };
-
-  const handlePrevChapter = async (): Promise<boolean> => {
-    if (!selectedManga || !currentChapterId) return false;
-
-    const getChapterNumber = (title: string): number => {
-      const match = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
-      return match ? parseFloat(match[1] || match[0]) : 0;
-    };
-
-    const sortedChapters = [...selectedManga.chapters].sort((a, b) => {
-      return getChapterNumber(a.title) - getChapterNumber(b.title);
-    });
-
-    const currentIndex = sortedChapters.findIndex(c => c.id === currentChapterId);
-    if (currentIndex === -1 || currentIndex === 0) return false;
-
-    const prevChapter = sortedChapters[currentIndex - 1];
-    try {
-      // No need to read file content anymore!
-      setInitialPage('last');
-      setReadingChapter({ fileName: prevChapter.fileName, id: prevChapter.id });
-      setCurrentChapterId(prevChapter.id);
-      return true;
-    } catch (error) {
-      console.error("Failed to load prev chapter", error);
-      return false;
-    }
-  };
-
-  const handleProgress = async (page: number, _total: number) => {
-    if (!selectedManga || !currentChapterId) return;
-
-    // Update progress
-    if (selectedManga.lastReadChapterId !== currentChapterId || selectedManga.lastReadPage !== page) {
-      const updatedManga = {
-        ...selectedManga,
-        lastReadChapterId: currentChapterId,
-        lastReadPage: page,
-        // readChapters is NOT updated here anymore, only in handleFinish
-      };
-      setSelectedManga(updatedManga);
-      await StorageService.saveManga(updatedManga);
-    }
   };
 
   const handleFinish = async () => {
     if (!selectedManga || !currentChapterId) return;
+    await markChapterAsRead(currentChapterId);
+  };
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-    let readChapters = selectedManga.readChapters || [];
-    if (!readChapters.includes(currentChapterId)) {
-      const updatedReadChapters = [...readChapters, currentChapterId];
-      const updatedManga = { ...selectedManga, readChapters: updatedReadChapters };
-
-      setSelectedManga(updatedManga);
-
-      const library = await StorageService.loadLibrary();
-      const newLibrary = library.map(m => m.id === selectedManga.id ? updatedManga : m);
-      await StorageService.saveLibrary(newLibrary);
-    }
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3000);
   };
 
+  // Persist selectedManga changes
+  useEffect(() => {
+    if (selectedManga) {
+      StorageService.saveManga(selectedManga).catch(err => console.error("Failed to save manga", err));
+    }
+  }, [selectedManga]);
+
+  const markChapterAsRead = (chapterId: string) => {
+    console.log(`[App] markChapterAsRead called for: ${chapterId}`);
+
+    setSelectedManga(prevManga => {
+      if (!prevManga) return null;
+
+      // Avoid duplicates
+      if (prevManga.readChapters?.includes(chapterId)) {
+        return prevManga;
+      }
+
+      const newReadChapters = [...(prevManga.readChapters || []), chapterId];
+      showToast(`Marked Read: ${chapterId.slice(-4)}`);
+
+      return { ...prevManga, readChapters: newReadChapters };
+    });
+  };
+
+  const sortedChapters = useMemo(() => {
+    if (!selectedManga) return [];
+    return [...selectedManga.chapters].sort((a, b) => {
+      const getNum = (t: string) => {
+        const m = t.match(/Chapter\s*(\d+(\.\d+)?)/i) || t.match(/(\d+(\.\d+)?)/);
+        return m ? parseFloat(m[1] || m[0]) : 0;
+      };
+      return getNum(a.title) - getNum(b.title);
+    });
+  }, [selectedManga?.chapters]);
+
   return (
-    <div className="app-container">
-      {view === 'home' && (
-        <Home
-          onMangaSelect={handleMangaSelect}
-          showAddModal={showSearch}
-          setShowAddModal={setShowSearch}
-        />
-      )}
-
-      {/* Keep MangaDetails mounted to preserve scroll position */}
-      {selectedManga && (
-        <div style={{ display: view === 'details' ? 'block' : 'none' }}>
-          <MangaDetails
-            manga={selectedManga}
-            onBack={() => setView('home')}
-            onRead={handleRead}
-
-            onUpdateManga={setSelectedManga}
-            onRemove={async () => {
-              await StorageService.removeManga(selectedManga);
-              setView('home');
-              setSelectedManga(null);
-            }}
-            downloadQueue={downloadQueue.map(i => i.chapter.id)}
-            activeDownloads={activeDownloads}
-            downloadProgress={downloadProgress}
-            onQueueDownload={addToDownloadQueue}
-          />
+    <div className="App h-screen w-screen bg-[#121212] text-white overflow-hidden flex flex-col">
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div className="fixed top-10 left-1/2 transform -translate-x-1/2 z-[100] bg-green-600 text-white px-4 py-2 rounded shadow-lg font-bold animate-in fade-in slide-in-from-top-5">
+          {toastMsg}
         </div>
       )}
 
-      {view === 'reader' && readingChapter && (
-        <Reader
-          chapterFileName={readingChapter.fileName}
-          onClose={handleCloseReader}
-          onNextChapter={handleNextChapter}
-          onPrevChapter={handlePrevChapter}
-          initialPage={initialPage}
-          onProgress={handleProgress}
-          onFinish={handleFinish}
-          mangaType={selectedManga?.type}
-        />
-      )}
+      <div className="flex-1 overflow-hidden relative flex flex-col">
+        {view === 'home' && (
+          <Home
+            onMangaSelect={handleMangaSelect}
+            showAddModal={showSearch}
+            setShowAddModal={setShowSearch}
+          />
+        )}
+
+        {/* Keep MangaDetails mounted to preserve scroll position */}
+        {selectedManga && (
+          <div style={{ display: view === 'details' ? 'block' : 'none', height: '100%' }}>
+            <MangaDetails
+              manga={selectedManga}
+              onBack={() => setView('home')}
+              onUpdateManga={setSelectedManga}
+              onRead={handleRead}
+              onRemove={async () => {
+                await StorageService.removeManga(selectedManga);
+                setView('home');
+                setSelectedManga(null);
+              }}
+              downloadQueue={downloadQueue.map(i => i.chapter.id)}
+              activeDownloads={activeDownloads}
+              downloadProgress={downloadProgress}
+              onQueueDownload={addToDownloadQueue}
+            />
+          </div>
+        )}
+
+        {view === 'reader' && readingChapter && (
+          <Reader
+            chapterFileName={readingChapter.fileName}
+            currentChapterId={currentChapterId || ''}
+            chapters={sortedChapters}
+            onClose={handleCloseReader}
+            onChapterChange={(newChapterId) => {
+              console.log(`[App] Chapter changed to: ${newChapterId}`);
+              setCurrentChapterId(newChapterId);
+            }}
+            getChapterContent={async (fileName) => {
+              return await StorageService.extractZipToCache(fileName);
+            }}
+            initialPage={initialPage}
+            onProgress={handleProgress}
+            onFinish={handleFinish}
+            onChapterComplete={markChapterAsRead}
+            mangaType={selectedManga?.type}
+          />
+        )}
+      </div>
     </div>
   );
 }
