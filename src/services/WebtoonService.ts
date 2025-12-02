@@ -118,14 +118,42 @@ export const WebtoonService = {
         try {
             // Use canonical URL if available to avoid redirects dropping params
             let requestUrl = `${WEBTOON_BASE_URL}/genre/title/list`;
+            let params: any = { title_no: mangaId, page: page.toString() };
+
+            // If we have a specific mangaUrl (canonical), use it
             if (mangaUrl) {
                 // Remove query params from canonical URL to let params object handle them cleanly
                 requestUrl = mangaUrl.split('?')[0];
+            } else if (page > 1) {
+                // If requesting a deep page without a canonical URL, we MUST fetch Page 1 first to get the canonical URL
+                // Otherwise Webtoon redirects generic URLs back to Page 1
+                try {
+                    const p1Response = await CapacitorHttp.get({
+                        url: `${WEBTOON_BASE_URL}/genre/title/list`,
+                        params: { title_no: mangaId, page: '1' },
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                            'Referer': 'https://www.webtoons.com/'
+                        }
+                    });
+                    const p1Html = p1Response.data;
+                    const p1Doc = new DOMParser().parseFromString(p1Html, 'text/html');
+                    const canonicalLink = p1Doc.querySelector('link[rel="canonical"]');
+                    if (canonicalLink) {
+                        const href = canonicalLink.getAttribute('href');
+                        if (href) {
+                            requestUrl = href.split('?')[0];
+                            // console.log('Found canonical URL:', requestUrl);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch canonical URL from Page 1', e);
+                }
             }
 
             const response = await CapacitorHttp.get({
                 url: requestUrl,
-                params: { title_no: mangaId, page: page.toString() },
+                params: params,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                     'Referer': 'https://www.webtoons.com/'
@@ -220,6 +248,7 @@ export const WebtoonService = {
     // Get pages for a chapter
     getChapterPages: async (mangaId: string, chapterId: string): Promise<string[]> => {
         try {
+            console.log(`[WebtoonService] getChapterPages called with mangaId: ${mangaId}, chapterId: ${chapterId}`);
             const response = await CapacitorHttp.get({
                 url: `${WEBTOON_BASE_URL}/genre/title/episode/viewer`,
                 params: { title_no: mangaId, episode_no: chapterId },
@@ -230,11 +259,14 @@ export const WebtoonService = {
             });
 
             const html = response.data;
+            console.log(`[WebtoonService] Received response, status: ${response.status}, html length: ${html?.length || 0}`);
+
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
 
             const imageUrls: string[] = [];
             const images = doc.querySelectorAll('.viewer_img img');
+            console.log(`[WebtoonService] Found ${images.length} image elements`);
 
             images.forEach(img => {
                 const src = img.getAttribute('data-url'); // Webtoon often uses data-url for lazy loading
@@ -242,6 +274,18 @@ export const WebtoonService = {
                     imageUrls.push(src);
                 }
             });
+
+            console.log(`[WebtoonService] Extracted ${imageUrls.length} image URLs`);
+            if (imageUrls.length === 0 && images.length > 0) {
+                console.warn(`[WebtoonService] Found ${images.length} images but couldn't extract URLs. Checking 'src' attribute as fallback...`);
+                images.forEach(img => {
+                    const src = img.getAttribute('src');
+                    if (src && src.startsWith('http')) {
+                        imageUrls.push(src);
+                    }
+                });
+                console.log(`[WebtoonService] After fallback: ${imageUrls.length} URLs`);
+            }
 
             return imageUrls;
         } catch (error) {

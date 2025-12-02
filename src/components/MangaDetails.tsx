@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { StorageService } from '../services/StorageService';
 import type { Manga, Chapter } from '../services/StorageService';
-import { ArrowLeft, Plus, Play, Trash2, Check } from 'lucide-react';
+import { ArrowLeft, Plus, Play, Trash2, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { OnlineChapterList } from './OnlineChapterList';
 
 interface MangaDetailsProps {
@@ -24,6 +24,15 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
     const [deleteConfirmation, setDeleteConfirmation] = useState<Chapter | null>(null);
     const [showRemoveConfirmation, setShowRemoveConfirmation] = useState(false);
     const [showBulkDeleteConfirmation, setShowBulkDeleteConfirmation] = useState(false);
+
+    // Debug logs
+    const [debugLogs, setDebugLogs] = useState<string[]>([]);
+    const [showDebug, setShowDebug] = useState(false);
+
+    const addLog = (msg: string) => {
+        console.log(msg);
+        setDebugLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 50));
+    };
 
     // Cache for online chapters to prevent reloading on tab switch
     const [cachedOnlineChapters, setCachedOnlineChapters] = useState<any[]>([]);
@@ -52,11 +61,15 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
 
     // DEBUG: Log manga updates
     useEffect(() => {
-        console.log(`[MangaDetails] Manga prop updated. Read chapters: ${manga.readChapters?.length}`);
+        addLog(`Manga updated: ${manga.title}`);
+        addLog(`Total chapters: ${manga.chapters.length}`);
+        addLog(`Read chapters: ${manga.readChapters?.length || 0}`);
+        addLog(`Chapters: ${manga.chapters.map(c => `${c.title} (${c.fileName})`).join(', ')}`);
     }, [manga]);
 
     // Multi-select state
     const [selectedChapters, setSelectedChapters] = useState<Set<string>>(new Set());
+    const [showSpecials, setShowSpecials] = useState(false); // State for specials dropdown
     const isSelectionMode = selectedChapters.size > 0;
     const longPressTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -138,23 +151,45 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
 
     const handleReadChapter = async (chapter: Chapter) => {
         try {
+            addLog(`handleReadChapter called for: ${chapter.title}`);
+            addLog(`Chapter fileName: ${chapter.fileName}`);
+            addLog(`lastReadChapterId: ${manga.lastReadChapterId}, lastReadPage: ${manga.lastReadPage}`);
+
             // Pass the filename directly, do not load content
             const page = (manga.lastReadChapterId === chapter.id) ? (manga.lastReadPage || 0) : 0;
+            addLog(`Calculated page: ${page} (isResume: ${manga.lastReadChapterId === chapter.id})`);
+
             onRead(chapter.fileName, chapter.id, page);
+            addLog(`onRead called successfully`);
         } catch (error) {
             console.error("Failed to load chapter", error);
+            addLog(`ERROR: ${error}`);
             alert("Could not load chapter file.");
         }
     };
 
     const getChapterNumber = (title: string): number => {
-        const match = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
+        const match = title.match(/(?:Chapter|Episode)\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
         return match ? parseFloat(match[1] || match[0]) : 0;
     };
 
-    const sortedChapters = [...manga.chapters].sort((a, b) => {
+    const allSortedChapters = [...manga.chapters].sort((a, b) => {
         return getChapterNumber(a.title) - getChapterNumber(b.title);
     });
+
+    // Filter Specials
+    const isSpecial = (title: string) => {
+        if (title.match(/(Special|Extra|Prologue|Afterword)/i)) return true;
+        const num = getChapterNumber(title);
+        if (num === 0) {
+            const isZero = title.match(/(?:Chapter|Episode)\s*0/i) || title.trim() === '0';
+            return !isZero;
+        }
+        return false;
+    };
+
+    const specialChapters = allSortedChapters.filter(c => isSpecial(c.title));
+    const regularChapters = allSortedChapters.filter(c => !isSpecial(c.title));
 
     return (
         <div className="h-full overflow-y-auto bg-[#141414] pb-20 custom-scrollbar">
@@ -188,14 +223,6 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                             </span>
                         </div>
                         <p className="text-xs text-gray-500 mt-1">{manga.chapters.length} downloaded</p>
-                        {/* DEBUG: Show read chapters count (Uncomment to debug) */}
-                        {/* <p className="text-[10px] text-red-500 mt-1 font-mono">
-                            Read: {manga.readChapters?.length || 0} ({manga.readChapters?.slice(-3).join(', ')})
-                            <br />
-                            First Chap ID: {manga.chapters[0]?.id}
-                            <br />
-                            Is First Read: {manga.readChapters?.includes(manga.chapters[0]?.id) ? 'YES' : 'NO'}
-                        </p> */}
                     </div>
                 </div>
 
@@ -253,10 +280,12 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                             if (manga.lastReadChapterId) {
                                                 const chapter = manga.chapters.find(c => c.id === manga.lastReadChapterId);
                                                 if (chapter) {
-                                                    handleReadChapter(chapter); // handleReadChapter now handles loading
+                                                    handleReadChapter(chapter);
                                                 }
-                                            } else if (sortedChapters.length > 0) {
-                                                handleReadChapter(sortedChapters[0]);
+                                            } else if (regularChapters.length > 0) {
+                                                handleReadChapter(regularChapters[0]);
+                                            } else if (specialChapters.length > 0) {
+                                                handleReadChapter(specialChapters[0]);
                                             }
                                         }}
                                         className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"
@@ -274,7 +303,77 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                 </div>
                             )}
 
-                            {sortedChapters.map((chapter) => (
+                            {/* Specials Folder */}
+                            {specialChapters.length > 0 && (
+                                <div className="mb-2">
+                                    <button
+                                        onClick={() => setShowSpecials(!showSpecials)}
+                                        className="w-full flex items-center justify-between p-3 bg-[#1f1f1f] rounded-lg hover:bg-[#2a2a2a] transition-colors border border-[#333]"
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-yellow-500 font-bold text-sm uppercase tracking-wider">Specials</span>
+                                            <span className="text-xs text-gray-500 bg-[#141414] px-2 py-0.5 rounded-full">{specialChapters.length}</span>
+                                        </div>
+                                        {showSpecials ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                                    </button>
+
+                                    {showSpecials && (
+                                        <div className="mt-2 flex flex-col gap-2 pl-2 border-l-2 border-[#333]">
+                                            {specialChapters.map((chapter) => (
+                                                <div
+                                                    key={chapter.id}
+                                                    className={`flex items-center justify-between p-4 rounded transition-colors cursor-pointer group select-none
+                                                        ${selectedChapters.has(chapter.id) ? 'bg-red-900/30 border border-red-500/50' : 'bg-[#1f1f1f] hover:bg-[#2a2a2a] border border-transparent'}
+                                                    `}
+                                                    onClick={() => isSelectionMode ? toggleSelection(chapter.id) : handleReadChapter(chapter)}
+                                                    onContextMenu={(e) => {
+                                                        e.preventDefault();
+                                                        handleLongPress(chapter.id);
+                                                    }}
+                                                >
+                                                    <div className="flex items-center gap-3 overflow-hidden">
+                                                        {isSelectionMode && (
+                                                            <div className={`w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 ${selectedChapters.has(chapter.id) ? 'bg-red-600 border-red-600' : 'border-gray-500'}`}>
+                                                                {selectedChapters.has(chapter.id) && <Check size={14} className="text-white" />}
+                                                            </div>
+                                                        )}
+                                                        <div className="min-w-0">
+                                                            <h4 className={`font-medium truncate ${manga.lastReadChapterId === chapter.id ? 'text-blue-400' : 'text-gray-200'}`}>
+                                                                {chapter.title}
+                                                            </h4>
+                                                            <div className="flex items-center gap-2 mt-1">
+                                                                {manga.readChapters?.includes(chapter.id) && (
+                                                                    <span className="text-[10px] text-green-500 font-bold uppercase tracking-wide">Read</span>
+                                                                )}
+                                                                {manga.lastReadChapterId === chapter.id &&
+                                                                    !manga.readChapters?.includes(chapter.id) && (
+                                                                        <span className="text-[10px] text-blue-400/80 font-bold uppercase tracking-wide">Last Read</span>
+                                                                    )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        {!isSelectionMode && (
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setDeleteConfirmation(chapter);
+                                                                }}
+                                                                className="p-2 text-gray-500 hover:text-red-500 transition-colors"
+                                                            >
+                                                                <Trash2 size={18} />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Regular Chapters */}
+                            {regularChapters.map((chapter) => (
                                 <div
                                     key={chapter.id}
                                     className={`flex items-center justify-between p-4 rounded transition-colors cursor-pointer group select-none
@@ -315,9 +414,6 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                                     manga.readChapters?.some(readId => {
                                                         const readChapter = manga.chapters.find(c => c.id === readId);
                                                         const isMatch = readChapter?.title === chapter.title;
-                                                        if (!isMatch && readChapter && Math.random() < 0.0001) {
-                                                            console.log(`[MangaDetails] Check: '${readChapter.title}' vs '${chapter.title}'`);
-                                                        }
                                                         return isMatch;
                                                     })) && (
                                                         <span className="text-[10px] text-green-500 font-bold uppercase tracking-wide">Read</span>
@@ -480,6 +576,38 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                     </div>
                 )
             }
+
+            {/* Debug Overlay */}
+            {showDebug && (
+                <div className="fixed top-20 left-2 right-2 bg-black/90 text-green-400 p-4 rounded text-xs font-mono max-h-96 overflow-auto z-50">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="font-bold">Debug Logs</span>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(debugLogs.join('\n'));
+                                    alert('Logs copied!');
+                                }}
+                                className="text-green-400 px-2 py-1 bg-green-900/30 rounded hover:bg-green-900/50"
+                            >
+                                COPY
+                            </button>
+                            <button onClick={() => setShowDebug(false)} className="text-white">&times;</button>
+                        </div>
+                    </div>
+                    {debugLogs.map((log, i) => (
+                        <div key={i} className="mb-1">{log}</div>
+                    ))}
+                </div>
+            )}
+
+            {/* Debug Toggle Button */}
+            <button
+                onClick={() => setShowDebug(!showDebug)}
+                className="fixed bottom-4 right-4 bg-green-600 text-white p-3 rounded-full z-40 shadow-lg"
+            >
+                {showDebug ? '==' : 'BUG'}
+            </button>
         </div >
     );
 };

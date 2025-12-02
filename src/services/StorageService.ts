@@ -22,6 +22,8 @@ export interface Manga {
     lastReadChapterId?: string;
     lastReadPage?: number;
     readChapters?: string[]; // IDs of read chapters
+    source?: 'mangapill' | 'webtoon';
+    sourceMangaId?: string;
 }
 
 const MANGA_KEY = 'manga_library';
@@ -35,10 +37,21 @@ export const StorageService = {
         });
     },
 
-    // Update a single manga in the library
+    // Update a single manga in the library (Upsert)
     saveManga: async (manga: Manga) => {
         const library = await StorageService.loadLibrary();
-        const newLibrary = library.map(m => m.id === manga.id ? manga : m);
+        const index = library.findIndex(m => m.id === manga.id);
+
+        let newLibrary;
+        if (index !== -1) {
+            // Update existing
+            newLibrary = [...library];
+            newLibrary[index] = manga;
+        } else {
+            // Insert new
+            newLibrary = [manga, ...library];
+        }
+
         await StorageService.saveLibrary(newLibrary);
     },
 

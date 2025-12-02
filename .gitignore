@@ -27,7 +27,6 @@ debug_*.py
 debug_*.ts
 fetch_*.py
 test_*.py
-*.py
 debug_output.html
 
 # Documentation artifacts

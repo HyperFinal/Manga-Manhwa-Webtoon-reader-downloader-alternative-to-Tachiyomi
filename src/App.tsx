@@ -40,12 +40,16 @@ function App() {
       setDownloadProgress(prev => ({ ...prev, [chapter.id]: 0 }));
 
       try {
+        console.log(`[App] 📥 Starting download for chapter:`, chapter);
+        console.log(`[App] Download params: mangaTitle="${mangaTitle}", source="${source}", mangaId="${mangaId}"`);
+
         let fileName: string;
         let chapterTitle: string;
 
         if (source === 'mangapill') {
           const c = chapter as MangaPillChapter;
           chapterTitle = c.title;
+          console.log(`[App] MangaPill download: ${chapterTitle}`);
           fileName = await DownloadService.downloadChapter(
             chapterTitle,
             mangaTitle,
@@ -56,6 +60,7 @@ function App() {
         } else {
           const c = chapter as WebtoonChapter;
           chapterTitle = c.title;
+          console.log(`[App] Webtoon download: ${chapterTitle}, episode_no: ${c.id}`);
           // Webtoon needs mangaId. If not provided (should be), we might fail or need to search.
           // Assuming it's provided for now as we pass it from OnlineChapterList
           if (!mangaId) throw new Error("Manga ID required for Webtoon download");
@@ -77,23 +82,41 @@ function App() {
 
         // Update Storage
         const library = await StorageService.loadLibrary();
-        // Find the manga in library by title (since we might not have the ID if it was just added or if we are in background)
-        // Actually, we should probably pass the local manga ID if we have it.
-        // But for now, let's find by ID if selectedManga matches, or find by title.
-        // Wait, `mangaTitle` is passed.
-        // Let's assume we can find it.
-
-        // Better: Find by ID if we can. But we only stored mangaTitle in queue.
-        // Let's rely on finding by title or ID if we add it to queue item.
-        // For now, let's look up by title as it's unique enough for this app context usually?
-        // Actually, let's just use the current selectedManga if it matches, otherwise load from library.
-
         const targetManga = library.find(m => m.title === mangaTitle);
+
         if (targetManga) {
+          // Check if this chapter already exists with fileName: 'online'
+          // If so, update it instead of creating a duplicate
+          // Use trim() and normalized comparison for robust matching
+          const normalizedTitle = chapterTitle.trim().toLowerCase();
+          const existingOnlineIndex = targetManga.chapters.findIndex(
+            ch => ch.fileName === 'online' && ch.title.trim().toLowerCase() === normalizedTitle
+          );
+
+          console.log(`[App] Searching for existing chapter: "${chapterTitle}" (normalized: "${normalizedTitle}")`);
+          console.log(`[App] Existing chapters:`, targetManga.chapters.map(c => `"${c.title}" (${c.fileName})`));
+          console.log(`[App] Found existing at index: ${existingOnlineIndex}`);
+
+          let updatedChapters;
+          if (existingOnlineIndex !== -1) {
+            // Update existing online chapter with the downloaded file
+            console.log(`[App] ✅ Updating online chapter "${chapterTitle}" with downloaded file: ${fileName}`);
+            updatedChapters = [...targetManga.chapters];
+            updatedChapters[existingOnlineIndex] = {
+              ...updatedChapters[existingOnlineIndex],
+              fileName: fileName
+            };
+          } else {
+            // Add as new chapter
+            console.log(`[App] ➕ Adding new downloaded chapter: ${chapterTitle}`);
+            updatedChapters = [...targetManga.chapters, newChapter];
+          }
+
           const updatedManga = {
             ...targetManga,
-            chapters: [...targetManga.chapters, newChapter]
+            chapters: updatedChapters
           };
+
           const newLibrary = library.map(m => m.id === targetManga.id ? updatedManga : m);
           await StorageService.saveLibrary(newLibrary);
 
@@ -121,6 +144,16 @@ function App() {
   const addToDownloadQueue = (chapter: MangaPillChapter | WebtoonChapter, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => {
     // Check if already queued or downloading
     if (downloadQueue.some(item => item.chapter.id === chapter.id) || activeDownloads.includes(chapter.id)) return;
+
+    // Update manga source info if missing
+    if (selectedManga && (!selectedManga.source || !selectedManga.sourceMangaId)) {
+      console.log(`[App] Saving source info for ${mangaTitle}: ${source} / ${mangaId}`);
+      setSelectedManga(prev => prev ? ({
+        ...prev,
+        source,
+        sourceMangaId: mangaId || prev.sourceMangaId
+      }) : null);
+    }
 
     setDownloadQueue(prev => [...prev, { chapter, mangaTitle, source, mangaId }]);
   };
@@ -299,6 +332,7 @@ function App() {
             chapterFileName={readingChapter.fileName}
             currentChapterId={currentChapterId || ''}
             chapters={sortedChapters}
+            manga={selectedManga || undefined} // Pass selectedManga
             onClose={handleCloseReader}
             onChapterChange={(newChapterId) => {
               console.log(`[App] Chapter changed to: ${newChapterId}`);
@@ -311,6 +345,7 @@ function App() {
             onProgress={handleProgress}
             onFinish={handleFinish}
             onChapterComplete={markChapterAsRead}
+            onUpdateManga={setSelectedManga} // Pass state updater
             mangaType={selectedManga?.type}
           />
         )}

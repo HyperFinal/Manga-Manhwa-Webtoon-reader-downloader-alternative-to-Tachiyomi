@@ -1,12 +1,16 @@
 import React, { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion';
-import { X, ArrowDown, ArrowRight, ArrowLeft, Settings, Bug, Loader2 } from 'lucide-react';
-import type { Chapter } from '../services/StorageService';
+import { X, Settings, Bug, Loader2 } from 'lucide-react';
+import { MangaPillService } from '../services/MangaPillService';
+import { WebtoonService } from '../services/WebtoonService';
+import { StorageService, type Manga, type Chapter } from '../services/StorageService';
+import { DownloadService } from '../services/DownloadService';
 
 interface ReaderProps {
     chapterFileName: string;
     currentChapterId: string;
     chapters: Chapter[];
+    manga?: Manga; // Add manga prop
     onClose: () => void;
     onChapterChange: (chapterId: string) => void;
     getChapterContent: (fileName: string) => Promise<string[]>;
@@ -14,6 +18,7 @@ interface ReaderProps {
     onProgress?: (page: number, total: number, chapterId?: string) => void;
     onChapterComplete?: (chapterId: string) => void;
     onFinish?: () => void;
+    onUpdateManga?: (manga: Manga) => void; // Add onUpdateManga prop
     mangaType?: string;
 }
 
@@ -104,7 +109,7 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
             initialDistance.current = null;
 
             const currentScale = scale.get();
-            if (currentScale < 1) {
+            if (currentScale < 1.1) {
                 animate(scale, 1);
                 animate(x, 0);
                 animate(y, 0);
@@ -114,6 +119,68 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
             }
         }
     };
+
+    // Helper to fetch image securely with Referer
+    const [blobUrl, setBlobUrl] = useState<string | null>(null);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        let isMounted = true;
+        const fetchImage = async () => {
+            // Only use Secure Fetch for remote Webtoon/Naver images
+            // Local files (localhost, file://) should be loaded directly
+            const isRemoteWebtoon = src.startsWith('http') &&
+                (src.includes('webtoons.com') || src.includes('pstatic.net') || src.includes('naver.com'));
+
+            if (!isRemoteWebtoon) {
+                if (isMounted) setBlobUrl(src);
+                return;
+            }
+
+            try {
+                const { CapacitorHttp } = await import('@capacitor/core');
+                const response = await CapacitorHttp.get({
+                    url: src,
+                    responseType: 'blob',
+                    headers: {
+                        'Referer': 'https://www.webtoons.com/',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+
+                if (response.data) {
+                    const base64 = response.data;
+                    const mimeType = response.headers['content-type'] || 'image/jpeg';
+                    const url = `data:${mimeType};base64,${base64}`;
+                    if (isMounted) setBlobUrl(url);
+                } else {
+                    throw new Error('No data');
+                }
+            } catch (err) {
+                console.error('Failed to fetch image securely:', err);
+                if (isMounted) setError(true);
+            }
+        };
+
+        fetchImage();
+        return () => { isMounted = false; };
+    }, [src]);
+
+    if (error) {
+        return (
+            <div className="w-full h-96 flex items-center justify-center text-red-500 bg-gray-900">
+                <p>Failed to load image</p>
+            </div>
+        );
+    }
+
+    if (!blobUrl) {
+        return (
+            <div className="w-full h-96 flex items-center justify-center text-gray-500 bg-gray-900 animate-pulse">
+                <Loader2 className="animate-spin" />
+            </div>
+        );
+    }
 
     // Calculate drag constraints based on the committed constraintScale
     const xLimit = containerRef.current ? (containerRef.current.clientWidth * (constraintScale - 1)) / 2 : 0;
@@ -129,7 +196,7 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
             onTouchEnd={handleTouchEnd}
         >
             <motion.img
-                src={src}
+                src={blobUrl}
                 alt={alt}
                 style={{ x, y, scale, cursor: constraintScale > 1 ? 'grab' : 'default' }}
                 className="max-w-full max-h-full object-contain select-none"
@@ -139,16 +206,90 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
                     left: -xLimit,
                     right: xLimit,
                     top: -yLimit,
-                    bottom: yLimit
+                    bottom: yLimit,
                 }}
             />
         </div>
     );
 };
 
+// Simple Secure Image for Vertical Mode
+const SecureImage = ({ src, alt }: { src: string, alt: string }) => {
+    const [blobUrl, setBlobUrl] = useState<string | null>(null);
+    const [error, setError] = useState(false);
+
+    useEffect(() => {
+        let isMounted = true;
+        const fetchImage = async () => {
+            // Only use Secure Fetch for remote Webtoon/Naver images
+            // Local files (localhost, file://) should be loaded directly
+            const isRemoteWebtoon = src.startsWith('http') &&
+                (src.includes('webtoons.com') || src.includes('pstatic.net') || src.includes('naver.com'));
+
+            if (!isRemoteWebtoon) {
+                if (isMounted) setBlobUrl(src);
+                return;
+            }
+
+            try {
+                const { CapacitorHttp } = await import('@capacitor/core');
+                const response = await CapacitorHttp.get({
+                    url: src,
+                    responseType: 'blob',
+                    headers: {
+                        'Referer': 'https://www.webtoons.com/',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+
+                if (response.data) {
+                    const base64 = response.data;
+                    const mimeType = response.headers['content-type'] || 'image/jpeg';
+                    const url = `data:${mimeType};base64,${base64}`;
+                    if (isMounted) setBlobUrl(url);
+                } else {
+                    throw new Error('No data');
+                }
+            } catch (err) {
+                console.error('Failed to fetch image securely:', err);
+                if (isMounted) setError(true);
+            }
+        };
+
+        fetchImage();
+        return () => { isMounted = false; };
+    }, [src]);
+
+    if (error) {
+        return (
+            <div className="w-full h-96 flex items-center justify-center text-red-500 bg-gray-900">
+                <p>Failed to load image</p>
+            </div>
+        );
+    }
+
+    if (!blobUrl) {
+        return (
+            <div className="w-full h-96 flex items-center justify-center text-gray-500 bg-gray-900 animate-pulse">
+                <Loader2 className="animate-spin" />
+            </div>
+        );
+    }
+
+    return (
+        <img
+            src={blobUrl}
+            alt={alt}
+            className="w-full h-auto block"
+            loading="lazy"
+        />
+    );
+};
+
 export const Reader: React.FC<ReaderProps> = ({
     currentChapterId,
     chapters,
+    manga, // Destructure manga
     onClose,
     onChapterChange,
     getChapterContent,
@@ -156,6 +297,7 @@ export const Reader: React.FC<ReaderProps> = ({
     onProgress,
     onChapterComplete,
     onFinish,
+    onUpdateManga, // Destructure onUpdateManga
     mangaType
 }) => {
     // State
@@ -165,6 +307,27 @@ export const Reader: React.FC<ReaderProps> = ({
     const [showSettings, setShowSettings] = useState(false);
     const [activeChapterId, setActiveChapterId] = useState<string>(currentChapterId);
     const [currentPage, setCurrentPage] = useState(0); // Relative to active chapter
+    const [isLoadingNextOnline, setIsLoadingNextOnline] = useState(false); // New state
+    const [allChapters, setAllChapters] = useState<Chapter[]>(chapters); // Track all chapters including online ones
+
+    // Sync allChapters when props change (initial load)
+    useEffect(() => {
+        setAllChapters(prev => {
+            // Merge props.chapters into prev, avoiding duplicates
+            const newChapters = [...prev];
+            chapters.forEach(c => {
+                if (!newChapters.some(nc => nc.id === c.id)) {
+                    newChapters.push(c);
+                }
+            });
+            // Sort by something? No, trust order.
+            // Actually, if we are just starting, props.chapters is the truth.
+            // But if we added online chapters, we want to keep them.
+            // For now, let's just assume props.chapters is the base.
+            if (prev.length === 0) return chapters;
+            return newChapters;
+        });
+    }, [chapters]);
 
     // Debug State
     const [debugLogs, setDebugLogs] = useState<string[]>([]);
@@ -175,22 +338,303 @@ export const Reader: React.FC<ReaderProps> = ({
         setDebugLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 50));
     };
 
+    const hasTriedLoadingNextRef = useRef(false);
+
+    // Reset the ref when the active chapter changes
+    useEffect(() => {
+        hasTriedLoadingNextRef.current = false;
+    }, [activeChapterId]);
+
+
     // Refs
     const verticalContainerRef = useRef<HTMLDivElement>(null);
     const horizontalContainerRef = useRef<HTMLDivElement>(null);
     const settingsRef = useRef<HTMLDivElement>(null);
+    const settingsBtnRef = useRef<HTMLButtonElement>(null); // Ref for settings button
     const isLoadingRef = useRef(false);
     const scrollAnchorRef = useRef<{ id: string, offset: number } | null>(null);
     const scrollAdjustmentRef = useRef<number>(0);
     const isResumingRef = useRef(false);
     const activeChapterIdRef = useRef(currentChapterId);
     const hasInitialScrolledRef = useRef(false);
+    const completedChaptersRef = useRef<Set<string>>(new Set());
+    const nearBottomLoggedRef = useRef<Set<string>>(new Set());
+
+    // Save progress to storage
+    const saveProgress = async (updates: { currentChapterId?: string, completedChapterId?: string, newChapter?: Chapter, currentPage?: number }) => {
+        if (!manga) return;
+
+        try {
+            const updatedManga = { ...manga };
+
+            if (updates.currentChapterId) {
+                updatedManga.lastReadChapterId = updates.currentChapterId;
+            }
+
+            if (updates.currentPage !== undefined) {
+                updatedManga.lastReadPage = updates.currentPage;
+            }
+
+            if (updates.completedChapterId) {
+                const readChapters = new Set(updatedManga.readChapters || []);
+                readChapters.add(updates.completedChapterId);
+                updatedManga.readChapters = Array.from(readChapters);
+            }
+
+            if (updates.newChapter) {
+                if (!updatedManga.chapters.some(c => c.id === updates.newChapter!.id)) {
+                    updatedManga.chapters = [...updatedManga.chapters, updates.newChapter!];
+                }
+            }
+
+            // CLEANUP: Remove read chapter IDs that no longer exist in chapters array
+            if (updatedManga.readChapters && updatedManga.readChapters.length > 0) {
+                const validChapterIds = new Set(updatedManga.chapters.map(c => c.id));
+                const cleanedReadChapters = updatedManga.readChapters.filter(id => validChapterIds.has(id));
+
+                if (cleanedReadChapters.length !== updatedManga.readChapters.length) {
+                    addLog(`Cleaned readChapters: ${updatedManga.readChapters.length} -> ${cleanedReadChapters.length}`);
+                    updatedManga.readChapters = cleanedReadChapters;
+                }
+            }
+
+            // CRITICAL: Verify we're not about to delete all chapters
+            if (updatedManga.chapters.length === 0 && manga.chapters.length > 0) {
+                console.error("[Reader] CRITICAL: Attempted to save manga with 0 chapters!");
+                addLog(`ERROR: Attempted to delete all chapters! Aborting save.`);
+                return;
+            }
+
+            addLog(`Saving progress: chId=${updates.currentChapterId}, page=${updates.currentPage}, completed=${updates.completedChapterId}, chapters=${updatedManga.chapters.length}`);
+
+            // Use onUpdateManga if available to sync with parent state
+            if (onUpdateManga) {
+                onUpdateManga(updatedManga);
+            } else {
+                // Fallback to direct save (though App.tsx might overwrite if not synced)
+                await StorageService.saveManga(updatedManga);
+            }
+        } catch (e) {
+            console.error("Failed to save progress", e);
+            addLog("Error saving progress");
+        }
+    };
+
+    const loadNextOnlineChapter = async () => {
+        // Silent return if already tried or loading
+        if (hasTriedLoadingNextRef.current || isLoadingNextOnline) return;
+
+        addLog(`loadNextOnlineChapter called. Source: ${manga?.source}, ID: ${manga?.sourceMangaId}`);
+
+        if (!manga || !manga.source || !manga.sourceMangaId) {
+            if (!manga?.source) addLog("Missing source");
+            if (!manga?.sourceMangaId) addLog("Missing sourceMangaId");
+            return;
+        }
+
+        hasTriedLoadingNextRef.current = true;
+        setIsLoadingNextOnline(true);
+        addLog(`Checking for next online chapter from ${manga.source}...`);
+
+        try {
+            let nextChapterData = null;
+            let nextChapterPages: string[] = [];
+
+            if (manga.source === 'mangapill') {
+                const slug = manga.sourceMangaId;
+                const onlineChapters = await MangaPillService.getChapters(manga.id, slug);
+
+                // Find current chapter in the online list by matching numbers
+                const lastLoaded = loadedChapters[loadedChapters.length - 1];
+                const getChapterNum = (title: string) => {
+                    const m = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
+                    return m ? parseFloat(m[1] || m[0]) : -1;
+                };
+                const lastNum = getChapterNum(lastLoaded.title);
+
+                const sortedIndex = onlineChapters.findIndex(c => Math.abs(parseFloat(c.number) - lastNum) < 0.01);
+
+                if (sortedIndex !== -1 && sortedIndex < onlineChapters.length - 1) {
+                    nextChapterData = onlineChapters[sortedIndex + 1];
+                    addLog(`Found next chapter: ${nextChapterData.title} (Num: ${nextChapterData.number})`);
+                    nextChapterPages = await MangaPillService.getChapterPages(nextChapterData.url);
+                } else {
+                    addLog(`Could not find current chapter ${lastLoaded.title} (Num: ${lastNum}) in online list.`);
+                }
+            } else if (manga.source === 'webtoon') {
+                const mangaId = manga.sourceMangaId;
+                const lastLoaded = loadedChapters[loadedChapters.length - 1];
+
+                // Helper to extract number
+                const getEpisodeNum = (title: string) => {
+                    const m = title.match(/Episode\s*(\d+)/i) || title.match(/Ep\.?\s*(\d+)/i) || title.match(/#(\d+)/) || title.match(/^(\d+)$/);
+                    return m ? parseInt(m[1]) : -1;
+                };
+
+                const lastNum = getEpisodeNum(lastLoaded.title);
+                addLog(`Webtoon: Last loaded chapter number: ${lastNum}`);
+
+                if (lastNum !== -1) {
+                    const targetNum = lastNum + 1;
+                    addLog(`Webtoon: Looking for Episode ${targetNum}...`);
+
+                    // 1. Fetch Page 1 to get metadata (Latest Ep, Max Page)
+                    let { chapters: page1Chapters, maxPage } = await WebtoonService.getChapters(mangaId, 1);
+
+                    const findChapter = (list: any[], num: number) => list.find(c => {
+                        const cNum = getEpisodeNum(c.title);
+                        const cIdNum = parseInt(c.id);
+                        return cNum === num || cIdNum === num;
+                    });
+
+                    // Check Page 1 first
+                    nextChapterData = findChapter(page1Chapters, targetNum);
+
+                    if (!nextChapterData && maxPage > 1) {
+                        // 2. Smart Pagination Heuristic
+                        const latestEp = page1Chapters[0];
+                        const latestNum = getEpisodeNum(latestEp.title);
+
+                        if (latestNum !== -1) {
+                            const itemsPerPage = page1Chapters.length; // usually 10
+                            const diff = latestNum - targetNum;
+                            let estimatedPage = 1 + Math.floor(diff / itemsPerPage);
+                            estimatedPage = Math.min(estimatedPage, maxPage);
+                            estimatedPage = Math.max(estimatedPage, 1);
+
+                            addLog(`Webtoon: Heuristic estimated page ${estimatedPage} (Latest: ${latestNum}, Target: ${targetNum})`);
+
+                            if (estimatedPage !== 1) {
+                                const { chapters: estimatedChapters, maxPage: newMax } = await WebtoonService.getChapters(mangaId, estimatedPage);
+                                nextChapterData = findChapter(estimatedChapters, targetNum);
+                                if (newMax > maxPage) maxPage = newMax;
+                            }
+
+                            // 3. Fallback: Check last page
+                            if (!nextChapterData) {
+                                const { chapters: lastPageChapters } = await WebtoonService.getChapters(mangaId, maxPage);
+                                nextChapterData = findChapter(lastPageChapters, targetNum);
+                            }
+                        }
+                    }
+
+                    // 3. Fallback: Pagination Traversal
+                    // If the heuristic failed, it might be because maxPage was only the *visible* max page (e.g. 10)
+                    // but the true max page is 20. We need to traverse.
+                    if (!nextChapterData && maxPage > 1) {
+                        addLog(`Webtoon: Heuristic failed. Starting Pagination Traversal...`);
+
+                        let currentSearchPage = maxPage;
+                        let attempts = 0;
+                        const MAX_ATTEMPTS = 5; // Prevent infinite loops
+                        const visitedPages = new Set<number>();
+                        visitedPages.add(1); // We already checked page 1
+
+                        while (!nextChapterData && attempts < MAX_ATTEMPTS) {
+                            if (visitedPages.has(currentSearchPage)) {
+                                break; // Already checked this page
+                            }
+                            visitedPages.add(currentSearchPage);
+
+                            addLog(`Webtoon: Checking Page ${currentSearchPage}...`);
+                            const { chapters: pageChapters, maxPage: newMaxPage } = await WebtoonService.getChapters(mangaId, currentSearchPage);
+
+                            // Check if target is in this list
+                            nextChapterData = findChapter(pageChapters, targetNum);
+                            if (nextChapterData) break;
+
+                            // If we found a new max page that is greater than where we are, jump to it
+                            if (newMaxPage > currentSearchPage) {
+                                currentSearchPage = newMaxPage;
+                                attempts++;
+                            } else {
+                                // We reached the true end
+                                break;
+                            }
+                        }
+                    }
+
+                    if (nextChapterData) {
+                        addLog(`Webtoon: Found Episode ${targetNum}`);
+                        nextChapterPages = await WebtoonService.getChapterPages(mangaId, nextChapterData.id);
+                    } else {
+                        addLog(`Webtoon: Could not find Episode ${targetNum} using heuristic or fallbacks.`);
+                        addLog(`Debug: MaxPage=${maxPage}, Target=${targetNum}`);
+                    }
+                } else {
+                    addLog(`Webtoon: Could not parse number from title: ${lastLoaded.title}`);
+                }
+            }
+
+            if (nextChapterData && nextChapterPages.length > 0) {
+                const newChapter: LoadedChapter = {
+                    id: nextChapterData.id, // Use online ID
+                    title: nextChapterData.title,
+                    pages: nextChapterPages,
+                    status: 'loaded'
+                };
+
+                // Check if already exists (by title) to avoid duplicates
+                if (!loadedChapters.some(c => c.title === newChapter.title)) {
+                    setLoadedChapters(prev => [...prev, newChapter]);
+                    addLog(`Loaded online chapter: ${newChapter.title}`);
+
+                    // [NEW] Download to local storage in background
+                    const downloadAndSave = async () => {
+                        try {
+                            addLog(`Auto-downloading ${nextChapterData.title} to local storage...`);
+                            const fileName = await DownloadService.downloadChapter(
+                                nextChapterData.title,
+                                manga.title,
+                                async () => nextChapterPages, // Pages already fetched
+                                { 'Referer': 'https://www.webtoons.com/' }
+                            );
+
+                            addLog(`Downloaded ${nextChapterData.title} as ${fileName}`);
+
+                            // Update chapter metadata with local fileName
+                            const newChapterMeta: Chapter = {
+                                id: nextChapterData.id,
+                                title: nextChapterData.title,
+                                fileName: fileName // Use local file instead of 'online'
+                            };
+
+                            setAllChapters(prev => [...prev, newChapterMeta]);
+                            saveProgress({ newChapter: newChapterMeta });
+                        } catch (err) {
+                            addLog(`Failed to download ${nextChapterData.title}: ${err}`);
+                            // Fallback to online reference
+                            const newChapterMeta: Chapter = {
+                                id: nextChapterData.id,
+                                title: nextChapterData.title,
+                                fileName: 'online'
+                            };
+                            setAllChapters(prev => [...prev, newChapterMeta]);
+                            saveProgress({ newChapter: newChapterMeta });
+                        }
+                    };
+
+                    // Fire and forget - don't wait
+                    downloadAndSave();
+                }
+            } else {
+                addLog("No next online chapter found.");
+            }
+
+        } catch (error) {
+            console.error("Failed to load next online chapter", error);
+            addLog("Error loading online chapter");
+        } finally {
+            setIsLoadingNextOnline(false);
+        }
+    };
 
     useEffect(() => {
         console.log('[Reader] MOUNTED');
         return () => console.log('[Reader] UNMOUNTED');
     }, []);
 
+    // Determine default reading mode
     // Determine default reading mode
     useEffect(() => {
         if (mangaType === 'Manhwa' || mangaType === 'Manhua' || mangaType === 'Webtoon') {
@@ -199,6 +643,8 @@ export const Reader: React.FC<ReaderProps> = ({
             setReadingMode('rtl'); // Default for Manga
         }
     }, [mangaType]);
+
+
 
     // Sync activeChapterId with prop and ref
     useEffect(() => {
@@ -224,7 +670,7 @@ export const Reader: React.FC<ReaderProps> = ({
                 return;
             }
 
-            addLog(`Init chapter: ${currentChapterId} (${currentChapter.title})`);
+            addLog(`Init chapter: ${currentChapterId}(${currentChapter.title})`);
 
             // Only reset if it's a fresh load (not in list)
             setLoadedChapters([{
@@ -235,7 +681,32 @@ export const Reader: React.FC<ReaderProps> = ({
             }]);
 
             try {
-                const pages = await getChapterContent(currentChapter.fileName);
+                let pages: string[] = [];
+                // Check if online chapter - ONLY check fileName
+                if (currentChapter.fileName === 'online') {
+                    // It's an online chapter, fetch pages
+                    addLog(`Initializing online chapter: ${currentChapter.title}`);
+
+                    // Extract episode number from title (WebtoonService expects episode_no, not internal UUID)
+                    const extractEpisodeNum = (title: string): string => {
+                        const m = title.match(/Episode\s*(\d+)/i) || title.match(/Ep\.?\s*(\d+)/i) || title.match(/#(\d+)/) || title.match(/^(\d+)$/);
+                        return m ? m[1] : currentChapter.id; // Fallback to ID if no number found
+                    };
+
+                    const episodeNum = extractEpisodeNum(currentChapter.title);
+                    addLog(`Extracted episode number: ${episodeNum} from title: ${currentChapter.title}`);
+
+                    if (manga?.source === 'webtoon' && manga.sourceMangaId) {
+                        pages = await WebtoonService.getChapterPages(manga.sourceMangaId, episodeNum);
+                    } else if (manga?.source === 'mangapill' && manga.sourceMangaId) {
+                        pages = await WebtoonService.getChapterPages(manga.sourceMangaId, episodeNum);
+                    }
+                } else {
+                    // Local chapter
+                    addLog(`Loading local chapter from file: ${currentChapter.fileName}`);
+                    pages = await getChapterContent(currentChapter.fileName);
+                }
+
                 setLoadedChapters([{
                     id: currentChapter.id,
                     title: currentChapter.title,
@@ -246,7 +717,7 @@ export const Reader: React.FC<ReaderProps> = ({
 
             } catch (err) {
                 console.error("Failed to load initial chapter", err);
-                addLog(`Error loading chapter: ${err}`);
+                addLog(`Error loading chapter: ${err} `);
                 setLoadedChapters(prev => prev.map(c => c.id === currentChapterId ? { ...c, status: 'error' } : c));
             }
         };
@@ -261,7 +732,7 @@ export const Reader: React.FC<ReaderProps> = ({
         const activeChapter = loadedChapters.find(c => c.id === currentChapterId);
 
         if (activeChapter && activeChapter.status === 'loaded' && !hasInitialScrolledRef.current) {
-            addLog(`Resume triggered. Page: ${initialPage}, Chapter: ${activeChapter.id}`);
+            addLog(`Resume triggered.Page: ${initialPage}, Chapter: ${activeChapter.id} `);
 
             if (initialPage === 'last') {
                 if (verticalContainerRef.current) {
@@ -350,7 +821,7 @@ export const Reader: React.FC<ReaderProps> = ({
                             return prev;
                         }
 
-                        const firstEl = document.getElementById(`chapter-${firstChapterId}`);
+                        const firstEl = document.getElementById(`chapter - ${firstChapterId} `);
                         if (firstEl && verticalContainerRef.current) {
                             const height = firstEl.clientHeight;
                             scrollAdjustmentRef.current = -height;
@@ -367,7 +838,7 @@ export const Reader: React.FC<ReaderProps> = ({
 
         } catch (err) {
             console.error("Failed to load chapter", err);
-            addLog(`Error loading chapter content: ${err}`);
+            addLog(`Error loading chapter content: ${err} `);
             setLoadedChapters(prev => prev.map(c => c.id === chapter.id ? { ...c, status: 'error' } : c));
             return [];
         } finally {
@@ -381,9 +852,9 @@ export const Reader: React.FC<ReaderProps> = ({
             // Handle Prepend Restoration
             if (scrollAnchorRef.current) {
                 const anchor = scrollAnchorRef.current;
-                const element = document.getElementById(`chapter-${anchor.id}`);
+                const element = document.getElementById(`chapter - ${anchor.id} `);
                 if (element) {
-                    addLog(`Restoring scroll to anchor: ${anchor.id}`);
+                    addLog(`Restoring scroll to anchor: ${anchor.id} `);
                     element.scrollIntoView({ block: 'start' });
                     scrollAnchorRef.current = null;
                 }
@@ -391,7 +862,7 @@ export const Reader: React.FC<ReaderProps> = ({
 
             // Handle Cleanup Adjustment (when removing from top)
             if (scrollAdjustmentRef.current !== 0) {
-                addLog(`Adjusting scroll by ${scrollAdjustmentRef.current}px`);
+                addLog(`Adjusting scroll by ${scrollAdjustmentRef.current} px`);
                 verticalContainerRef.current.scrollTop += scrollAdjustmentRef.current;
                 scrollAdjustmentRef.current = 0;
             }
@@ -404,7 +875,6 @@ export const Reader: React.FC<ReaderProps> = ({
 
         const container = verticalContainerRef.current;
         const scrollTop = container.scrollTop;
-        const scrollHeight = container.scrollHeight;
         const clientHeight = container.clientHeight;
 
         // 1. Detect Active Chapter & Page
@@ -440,33 +910,14 @@ export const Reader: React.FC<ReaderProps> = ({
             });
         }
 
-        if (bestChapterId !== activeChapterIdRef.current) {
-            const prevIndex = chapters.findIndex(c => c.id === activeChapterIdRef.current);
-            const newIndex = chapters.findIndex(c => c.id === bestChapterId);
-
-            addLog(`Chapter change: ${activeChapterIdRef.current} -> ${bestChapterId}`);
-            addLog(`Indices: ${prevIndex} -> ${newIndex}`);
-
-            if (newIndex > prevIndex && onChapterComplete) {
-                addLog(`Marking ${activeChapterIdRef.current} as complete`);
-                onChapterComplete(activeChapterIdRef.current);
-            } else {
-                addLog(`Not marking complete. New > Prev: ${newIndex > prevIndex}`);
-            }
-
-            activeChapterIdRef.current = bestChapterId;
-            setActiveChapterId(bestChapterId);
-            onChapterChange(bestChapterId);
-        }
-
-        // Find current page within active chapter
+        // Find current page within active chapter (MUST calculate BEFORE chapter change)
+        let bestPage = 0;
         if (bestChapterId) {
             const chapterEl = document.getElementById(`chapter-${bestChapterId}`);
             if (chapterEl) {
                 const images = chapterEl.querySelectorAll('.chapter-image');
                 let minDist = Infinity;
                 const centerY = clientHeight / 2;
-                let bestPage = 0;
 
                 images.forEach((img, index) => {
                     const rect = img.getBoundingClientRect();
@@ -479,31 +930,84 @@ export const Reader: React.FC<ReaderProps> = ({
                     }
                 });
                 setCurrentPage(bestPage);
-                const currentChap = loadedChapters.find(c => c.id === bestChapterId);
-                if (currentChap && onProgress) {
-                    onProgress(bestPage, currentChap.pages.length, bestChapterId);
+            }
+        }
+
+        // Handle chapter change (now we have bestPage calculated)
+        if (bestChapterId !== activeChapterIdRef.current) {
+            const prevIndex = allChapters.findIndex(c => c.id === activeChapterIdRef.current);
+            const newIndex = allChapters.findIndex(c => c.id === bestChapterId);
+
+            addLog(`Chapter change: ${activeChapterIdRef.current} -> ${bestChapterId}`);
+            addLog(`Indices: ${prevIndex} -> ${newIndex}`);
+
+            // Update active chapter (do NOT mark previous as read on transition)
+            activeChapterIdRef.current = bestChapterId;
+            setActiveChapterId(bestChapterId);
+            onChapterChange(bestChapterId);
+
+            // Save progress - NOW with currentPage included
+            saveProgress({ currentChapterId: bestChapterId, currentPage: bestPage });
+        }
+
+        // Update progress and check for completion
+        if (bestChapterId) {
+            const currentChap = loadedChapters.find(c => c.id === bestChapterId);
+            if (currentChap && onProgress) {
+                // Call onProgress to update App.tsx state
+                onProgress(bestPage, currentChap.pages.length, bestChapterId);
+
+                // [NEW] Mark as complete if on last page (only once per chapter)
+                const isLastPage = bestPage >= currentChap.pages.length - 1;
+                if (isLastPage && !completedChaptersRef.current.has(bestChapterId)) {
+                    completedChaptersRef.current.add(bestChapterId);
+                    addLog(`Reached last page of ${bestChapterId}, marking as complete`);
+                    if (onChapterComplete) {
+                        onChapterComplete(bestChapterId);
+                    }
+                    // CRITICAL: Also save currentChapterId and currentPage when completing
+                    saveProgress({
+                        completedChapterId: bestChapterId,
+                        currentChapterId: bestChapterId,
+                        currentPage: bestPage
+                    });
                 }
             }
         }
 
         // 2. Infinite Scroll Logic
-        const isNearBottom = scrollHeight - scrollTop - clientHeight < 4000;
+        // Trigger when scrolled past 70% of the CURRENT ACTIVE CHAPTER
+        let isNearBottomOfChapter = false;
+        if (bestChapterId) {
+            const activeChap = loadedChapters.find(c => c.id === bestChapterId);
+            if (activeChap) {
+                const chapterProgress = (bestPage + 1) / activeChap.pages.length;
+                isNearBottomOfChapter = chapterProgress >= 0.7;
+                if (isNearBottomOfChapter && !nearBottomLoggedRef.current.has(bestChapterId)) {
+                    nearBottomLoggedRef.current.add(bestChapterId);
+                    addLog(`Near bottom of chapter: ${bestPage + 1}/${activeChap.pages.length} (${Math.round(chapterProgress * 100)}%)`);
+                }
+            }
+        }
+
         const isNearTop = scrollTop < 1000;
 
-        if (isNearBottom) {
+        if (isNearBottomOfChapter) {
             const lastLoaded = loadedChapters[loadedChapters.length - 1];
             if (lastLoaded.status !== 'loaded') return;
 
-            const currentIndex = chapters.findIndex(c => c.id === lastLoaded.id);
-            if (currentIndex !== -1 && currentIndex < chapters.length - 1) {
-                const nextChapter = chapters[currentIndex + 1];
+            const currentIndex = allChapters.findIndex(c => c.id === lastLoaded.id);
+            if (currentIndex !== -1 && currentIndex < allChapters.length - 1) {
+                const nextChapter = allChapters[currentIndex + 1];
                 if (!loadedChapters.some(c => c.id === nextChapter.id)) {
                     addLog(`Loading next chapter: ${nextChapter.title}`);
                     await loadChapter(nextChapter, 'append');
                 }
-            } else if (currentIndex === chapters.length - 1) {
-                if (onFinish) {
-                    // onFinish(); 
+            } else if (currentIndex === allChapters.length - 1) {
+                if (manga?.source && manga?.sourceMangaId) {
+                    loadNextOnlineChapter();
+                } else if (onFinish) {
+                    onFinish();
                 }
             }
         }
@@ -512,9 +1016,9 @@ export const Reader: React.FC<ReaderProps> = ({
             const firstLoaded = loadedChapters[0];
             if (firstLoaded.status !== 'loaded') return;
 
-            const currentIndex = chapters.findIndex(c => c.id === firstLoaded.id);
+            const currentIndex = allChapters.findIndex(c => c.id === firstLoaded.id);
             if (currentIndex > 0) {
-                const prevChapter = chapters[currentIndex - 1];
+                const prevChapter = allChapters[currentIndex - 1];
                 if (!loadedChapters.some(c => c.id === prevChapter.id)) {
                     addLog(`Loading prev chapter: ${prevChapter.title}`);
                     await loadChapter(prevChapter, 'prepend');
@@ -563,26 +1067,22 @@ export const Reader: React.FC<ReaderProps> = ({
         // Check Last Chapter (Next)
         const lastChapter = loadedChapters[loadedChapters.length - 1];
         if (lastChapter.status === 'loaded') {
-            const lastPageId = `page-${lastChapter.id}-${lastChapter.pages.length - 1}`;
-            const lastPageEl = document.getElementById(lastPageId);
-            if (lastPageEl) {
-                const rect = lastPageEl.getBoundingClientRect();
-                const containerRect = container.getBoundingClientRect();
+            // Trigger earlier: Check if we are viewing one of the last 5 pages
+            const totalPages = lastChapter.pages.length;
+            const thresholdPage = Math.max(0, totalPages - 5);
 
-                const isVisible = isRTL
-                    ? (rect.right >= containerRect.left && rect.left <= containerRect.left + 100)
-                    : (rect.left <= containerRect.right && rect.right >= containerRect.right - 100);
+            if (activeChapterId === lastChapter.id && currentPage >= thresholdPage) {
+                const currentIndex = chapters.findIndex(c => c.id === lastChapter.id);
 
-                if (isVisible) {
-                    const currentIndex = chapters.findIndex(c => c.id === lastChapter.id);
-                    if (currentIndex < chapters.length - 1) {
-                        const nextChapter = chapters[currentIndex + 1];
-                        if (!loadedChapters.some(c => c.id === nextChapter.id)) {
-                            addLog(`Horizontal: Loading next chapter ${nextChapter.title}`);
-                            await loadChapter(nextChapter, 'append');
-                        }
-                    } else if (onFinish) {
-                        // onFinish();
+                if (currentIndex < chapters.length - 1) {
+                    const nextChapter = chapters[currentIndex + 1];
+                    if (!loadedChapters.some(c => c.id === nextChapter.id)) {
+                        addLog(`Horizontal: Pre-loading next chapter ${nextChapter.title}`);
+                        await loadChapter(nextChapter, 'append');
+                    }
+                } else {
+                    if (manga?.source && manga?.sourceMangaId) {
+                        loadNextOnlineChapter();
                     }
                 }
             }
@@ -617,13 +1117,12 @@ export const Reader: React.FC<ReaderProps> = ({
 
     // Single Page Navigation Logic
 
-
-
-
     // Close settings when clicking outside
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+            // Check if click is outside settings AND not on the toggle button
+            if (settingsRef.current && !settingsRef.current.contains(event.target as Node) &&
+                settingsBtnRef.current && !settingsBtnRef.current.contains(event.target as Node)) {
                 setShowSettings(false);
             }
         };
@@ -670,85 +1169,73 @@ export const Reader: React.FC<ReaderProps> = ({
 
                         <div className="flex gap-2 relative">
                             <div className="bg-black/50 backdrop-blur-md px-3 py-1 rounded-full text-xs font-medium text-white border border-white/10 flex items-center">
-                                {(() => {
-                                    const activeChapter = loadedChapters.find(c => c.id === activeChapterId);
-                                    const title = activeChapter?.title || '';
-                                    const match = title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
-                                    const chapNum = match ? match[1] : '';
-                                    const chapDisplay = chapNum ? `Chap. ${chapNum}` : (title.length > 10 ? title.substring(0, 10) + '...' : title);
-
-                                    return `${chapDisplay} • Page: ${currentPage + 1} / ${activeChapter?.pages.length || '?'}`;
-                                })()}
+                                <span className="mr-2 max-w-[150px] truncate">
+                                    {loadedChapters.find(c => c.id === activeChapterId)?.title || `Chapter ${activeChapterId}`}
+                                </span>
+                                <span className="text-white/50">|</span>
+                                <span className="ml-2">
+                                    Page {currentPage + 1} / {loadedChapters.find(c => c.id === activeChapterId)?.pages.length || '?'}
+                                </span>
                             </div>
-
+                            <button
+                                ref={settingsBtnRef}
+                                onClick={() => setShowSettings(!showSettings)}
+                                className="p-2 bg-black/50 rounded-full text-white backdrop-blur-md"
+                            >
+                                <Settings size={24} />
+                            </button>
                             <button
                                 onClick={() => setShowDebug(!showDebug)}
-                                className={`p-2 rounded-full backdrop-blur-md ${showDebug ? 'bg-green-900/50 text-green-400' : 'bg-black/50 text-white'}`}
+                                className={`p-2 rounded-full text-white backdrop-blur-md ${showDebug ? 'bg-green-900/50 text-green-400' : 'bg-black/50'}`}
                             >
-                                <Bug size={20} />
+                                <Bug size={24} />
                             </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-                            <div ref={settingsRef}>
-                                <button
-                                    onClick={() => setShowSettings(!showSettings)}
-                                    className="p-2 bg-black/50 rounded-full text-white backdrop-blur-md"
-                                >
-                                    <Settings size={20} />
-                                </button>
-
-                                {showSettings && (
-                                    <div className="absolute top-full right-0 mt-2 w-48 bg-[#1f1f1f] rounded-lg shadow-xl border border-gray-800 overflow-hidden">
-                                        <div className="p-2">
-                                            <div className="text-xs font-bold text-gray-500 px-2 py-1 mb-1">READING MODE</div>
-                                            <button
-                                                onClick={() => { setReadingMode('vertical'); setShowSettings(false); }}
-                                                className={`w-full text-left px-2 py-2 rounded text-sm flex items-center gap-2 ${readingMode === 'vertical' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-[#333]'}`}
-                                            >
-                                                <ArrowDown size={16} /> Vertical
-                                            </button>
-                                            <button
-                                                onClick={() => { setReadingMode('rtl'); setShowSettings(false); }}
-                                                className={`w-full text-left px-2 py-2 rounded text-sm flex items-center gap-2 ${readingMode === 'rtl' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-[#333]'}`}
-                                            >
-                                                <ArrowLeft size={16} /> Right to Left
-                                            </button>
-                                            <button
-                                                onClick={() => { setReadingMode('ltr'); setShowSettings(false); }}
-                                                className={`w-full text-left px-2 py-2 rounded text-sm flex items-center gap-2 ${readingMode === 'ltr' ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-[#333]'}`}
-                                            >
-                                                <ArrowRight size={16} /> Left to Right
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
+            {/* Settings Modal */}
+            <AnimatePresence>
+                {showSettings && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        className="absolute top-16 right-4 z-50 bg-gray-900 border border-gray-800 p-4 rounded-xl shadow-2xl w-64"
+                        ref={settingsRef}
+                    >
+                        <h3 className="text-white font-bold mb-3">Reading Settings</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-gray-400 text-xs uppercase font-bold mb-2 block">Reading Mode</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {['vertical', 'Left to right', 'Right to left'].map(mode => (
+                                        <button
+                                            key={mode}
+                                            onClick={() => setReadingMode(mode === 'Left to right' ? 'ltr' : mode === 'Right to left' ? 'rtl' : mode as any)}
+                                            className={`px-2 py-1.5 rounded text-xs font-medium capitalize transition-colors ${(readingMode === 'vertical' && mode === 'vertical') ||
+                                                (readingMode === 'ltr' && mode === 'Left to right') ||
+                                                (readingMode === 'rtl' && mode === 'Right to left')
+                                                ? 'bg-blue-600 text-white'
+                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                                                }`}
+                                        >
+                                            {mode}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </motion.div>
                 )}
             </AnimatePresence>
 
-            {/* Main Content */}
+            {/* Main Reader Area */}
             <div
                 className="flex-1 relative w-full h-full"
-                onClick={() => setShowControls(!showControls)}
+                onClick={() => setShowControls(prev => !prev)}
             >
-                {/* Error UI if no chapters loaded */}
-                {loadedChapters.length === 0 && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black text-red-500 flex-col gap-4 z-40">
-                        <div className="text-xl font-bold">Error: Chapter Not Found</div>
-                        <div className="text-sm text-gray-400">ID: {currentChapterId}</div>
-                        <div className="text-xs text-gray-500">
-                            Check debug logs for more info.
-                        </div>
-                        <button
-                            onClick={onClose}
-                            className="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-700"
-                        >
-                            Close Reader
-                        </button>
-                    </div>
-                )}
-
                 {readingMode === 'vertical' ? (
                     <div
                         ref={verticalContainerRef}
@@ -756,79 +1243,63 @@ export const Reader: React.FC<ReaderProps> = ({
                         onScroll={handleScroll}
                     >
                         {loadedChapters.map((chapter) => (
-                            <div key={chapter.id} id={`chapter-${chapter.id}`} className="flex flex-col min-h-[50vh]">
-                                {/* Chapter Divider */}
-                                <div className="py-8 flex items-center justify-center gap-4 text-gray-500">
-                                    <div className="h-px bg-gray-800 w-20"></div>
-                                    <span className="text-xs font-bold uppercase tracking-widest">{chapter.title}</span>
-                                    <div className="h-px bg-gray-800 w-20"></div>
-                                </div>
-
+                            <div key={chapter.id} id={`chapter-${chapter.id}`} className="flex flex-col items-center min-h-screen" data-chapter-id={chapter.id}>
                                 {chapter.status === 'loading' && (
-                                    <div className="h-96 flex items-center justify-center">
-                                        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                    <div className="w-full h-96 flex flex-col items-center justify-center text-gray-500 gap-4">
+                                        <Loader2 className="animate-spin" size={40} />
+                                        <p>Loading {chapter.title}...</p>
                                     </div>
                                 )}
-
                                 {chapter.status === 'error' && (
-                                    <div className="h-96 flex items-center justify-center text-red-500">
-                                        Failed to load chapter
+                                    <div className="w-full h-96 flex items-center justify-center text-red-500">
+                                        <p>Failed to load {chapter.title}</p>
                                     </div>
                                 )}
-
                                 {chapter.status === 'loaded' && chapter.pages.map((page, index) => (
-                                    <img
-                                        key={`${chapter.id}-${index}`}
-                                        src={page}
-                                        alt={`Page ${index + 1}`}
-                                        className="w-full h-auto object-contain chapter-image"
-                                        loading="lazy"
-                                    />
+                                    <div key={index} className="w-full max-w-3xl mx-auto relative chapter-image" id={`page-${chapter.id}-${index}`}>
+                                        <SecureImage
+                                            src={page}
+                                            alt={`Page ${index + 1}`}
+                                        />
+                                    </div>
                                 ))}
+                                <div className="h-20 flex items-center justify-center text-gray-600 text-sm">
+                                    End of {chapter.title}
+                                </div>
                             </div>
                         ))}
+                        {isLoadingNextOnline && (
+                            <div className="w-full py-8 flex flex-col items-center justify-center text-blue-400 gap-2">
+                                <Loader2 className="animate-spin" size={32} />
+                                <p className="text-sm font-medium">Fetching next chapter...</p>
+                            </div>
+                        )}
                     </div>
                 ) : (
-                    // Single Page Mode (Horizontal Scroll with Zoom)
                     <div
                         ref={horizontalContainerRef}
-                        className="w-full h-full overflow-x-auto overflow-y-hidden snap-x snap-mandatory flex scroll-smooth"
-                        style={{ direction: readingMode === 'rtl' ? 'rtl' : 'ltr' }}
+                        className={`w-full h-full overflow-x-auto overflow-y-hidden flex flex-row snap-x snap-mandatory`}
+                        dir={readingMode === 'rtl' ? 'rtl' : 'ltr'}
                         onScroll={handleHorizontalScroll}
                     >
                         {loadedChapters.map((chapter) => (
-                            <React.Fragment key={chapter.id}>
-                                {chapter.status === 'loading' && (
-                                    <div className="w-full h-full flex items-center justify-center min-w-full snap-center text-gray-500">
-                                        <Loader2 className="animate-spin" size={40} />
-                                    </div>
-                                )}
-                                {chapter.status === 'error' && (
-                                    <div className="w-full h-full flex items-center justify-center min-w-full snap-center text-red-500">
-                                        Failed to load chapter
-                                    </div>
-                                )}
+                            <div key={chapter.id} className="flex flex-shrink-0" data-chapter-id={chapter.id}>
                                 {chapter.status === 'loaded' && chapter.pages.map((page, index) => (
                                     <div
-                                        key={`${chapter.id}-${index}`}
-                                        id={`page-${chapter.id}-${index}`}
-                                        className="min-w-full h-full flex items-center justify-center snap-center snap-always relative page-container"
+                                        key={index}
+                                        className="w-screen h-full flex-shrink-0 snap-center flex items-center justify-center bg-black page-container"
                                         data-chapter-id={chapter.id}
                                         data-page-index={index}
+                                        id={`page-${chapter.id}-${index}`}
                                     >
                                         <ZoomableImage
                                             src={page}
                                             alt={`Page ${index + 1}`}
-                                            onDoubleTap={() => {
-                                                // Toggle controls on zoom reset? Or just zoom.
-                                            }}
+                                            onDoubleTap={() => setShowControls(prev => !prev)}
                                         />
-                                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur px-3 py-1 rounded-full text-xs text-white pointer-events-none z-10">
-                                            {chapter.title} • {index + 1} / {chapter.pages.length}
-                                        </div>
                                     </div>
                                 ))}
-                            </React.Fragment>
+                            </div>
                         ))}
                     </div>
                 )}
