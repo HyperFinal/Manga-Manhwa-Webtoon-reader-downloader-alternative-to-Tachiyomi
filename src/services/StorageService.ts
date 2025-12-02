@@ -24,6 +24,7 @@ export interface Manga {
     readChapters?: string[]; // IDs of read chapters
     source?: 'mangapill' | 'webtoon';
     sourceMangaId?: string;
+    preferredBatchSize?: number;
 }
 
 const MANGA_KEY = 'manga_library';

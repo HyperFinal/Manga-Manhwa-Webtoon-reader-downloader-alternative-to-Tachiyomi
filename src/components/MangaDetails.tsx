@@ -465,6 +465,7 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                             activeDownloads={activeDownloads}
                             downloadProgress={downloadProgress}
                             onQueueDownload={onQueueDownload}
+                            onUpdateManga={onUpdateManga}
                         />
                     )}
                 </div>
