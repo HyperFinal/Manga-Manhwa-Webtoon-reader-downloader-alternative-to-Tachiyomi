@@ -603,12 +603,12 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
             )}
 
             {/* Debug Toggle Button */}
-            <button
+            {/* <button
                 onClick={() => setShowDebug(!showDebug)}
                 className="fixed bottom-4 right-4 bg-green-600 text-white p-3 rounded-full z-40 shadow-lg"
             >
                 {showDebug ? '==' : 'BUG'}
-            </button>
+            </button> */}
         </div >
     );
 };

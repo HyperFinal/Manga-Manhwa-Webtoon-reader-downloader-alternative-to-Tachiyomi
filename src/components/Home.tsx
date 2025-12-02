@@ -3,7 +3,7 @@ import { StorageService } from '../services/StorageService';
 import type { Manga } from '../services/StorageService';
 import { MangaService } from '../services/MangaService';
 import type { MangaMetadata } from '../services/MangaService';
-import { Plus, X, ArrowLeft, Eye, Heart } from 'lucide-react';
+import { Plus, X, ArrowLeft, Eye } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface HomeProps {
@@ -296,7 +296,7 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
             {/* Floating Action Button for Add */}
             {library.length > 0 && (
                 <>
-                    <motion.a
+                    {/* <motion.a
                         href="https://www.paypal.com/donate/?hosted_button_id=RYRGN9J2U3AYW"
                         target="_blank"
                         rel="noopener noreferrer"
@@ -306,7 +306,7 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
                     >
                         <Heart size={20} fill="white" />
                         <span>Support</span>
-                    </motion.a>
+                    </motion.a> */}
 
                     <motion.button
                         whileHover={{ scale: 1.1 }}

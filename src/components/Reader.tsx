@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion';
-import { X, Settings, Bug, Loader2 } from 'lucide-react';
+import { X, Settings, Loader2 } from 'lucide-react';
 import { MangaPillService } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
 import { StorageService, type Manga, type Chapter } from '../services/StorageService';
@@ -331,7 +331,7 @@ export const Reader: React.FC<ReaderProps> = ({
 
     // Debug State
     const [debugLogs, setDebugLogs] = useState<string[]>([]);
-    const [showDebug, setShowDebug] = useState(true);
+    const [showDebug] = useState(false);
 
     const addLog = (msg: string) => {
         console.log(msg);
@@ -1184,12 +1184,12 @@ export const Reader: React.FC<ReaderProps> = ({
                             >
                                 <Settings size={24} />
                             </button>
-                            <button
+                            {/* <button
                                 onClick={() => setShowDebug(!showDebug)}
                                 className={`p-2 rounded-full text-white backdrop-blur-md ${showDebug ? 'bg-green-900/50 text-green-400' : 'bg-black/50'}`}
                             >
                                 <Bug size={24} />
-                            </button>
+                            </button> */}
                         </div>
                     </motion.div>
                 )}
