@@ -20,6 +20,7 @@ export interface MangaMetadata {
     genres: {
         name: string;
     }[];
+    alternativeTitles: string[];
     status: string;
     chapters: number | null;
 }
@@ -75,7 +76,10 @@ export const MangaService = {
             }
 
             const response = await axios.get(`${JIKAN_API_URL}/manga`, { params });
-            const data = response.data.data;
+            const data = response.data.data.map((item: any) => ({
+                ...item,
+                alternativeTitles: item.titles ? item.titles.map((t: any) => t.title) : []
+            }));
 
             // Cache the results
             MangaService.searchCache.set(cacheKey, data);

@@ -10,6 +10,7 @@ import type { MangaPillChapter } from './services/MangaPillService';
 import { WebtoonService } from './services/WebtoonService';
 import type { WebtoonChapter } from './services/WebtoonService';
 import { DownloadService } from './services/DownloadService';
+import { ArenaScansService } from './services/ArenaScansService';
 import './styles/theme.css';
 
 function App() {
@@ -21,7 +22,7 @@ function App() {
   const [initialPage, setInitialPage] = useState<number | 'last'>(0);
 
   // Download State
-  const [downloadQueue, setDownloadQueue] = useState<{ chapter: MangaPillChapter | WebtoonChapter, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string }[]>([]);
+  const [downloadQueue, setDownloadQueue] = useState<{ chapter: MangaPillChapter | WebtoonChapter, mangaTitle: string, source: 'mangapill' | 'webtoon' | 'arenascans', mangaId?: string }[]>([]);
   const [activeDownloads, setActiveDownloads] = useState<string[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const MAX_CONCURRENT_DOWNLOADS = 3;
@@ -55,6 +56,17 @@ function App() {
             mangaTitle,
             () => MangaPillService.getChapterPages(c.url),
             { 'Referer': 'https://mangapill.com/' },
+            (p: number) => setDownloadProgress(prev => ({ ...prev, [chapter.id]: p }))
+          );
+        } else if (source === 'arenascans') {
+          const c = chapter as WebtoonChapter; // Reusing WebtoonChapter interface
+          chapterTitle = c.title;
+          console.log(`[App] ArenaScans download: ${chapterTitle}`);
+          fileName = await DownloadService.downloadChapter(
+            chapterTitle,
+            mangaTitle,
+            () => ArenaScansService.getPages(c.url),
+            { 'Referer': 'https://arenascan.com/' },
             (p: number) => setDownloadProgress(prev => ({ ...prev, [chapter.id]: p }))
           );
         } else {
@@ -141,7 +153,7 @@ function App() {
     processQueue();
   }, [downloadQueue, activeDownloads, selectedManga]);
 
-  const addToDownloadQueue = (chapter: MangaPillChapter | WebtoonChapter, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => {
+  const addToDownloadQueue = (chapter: MangaPillChapter | WebtoonChapter, mangaTitle: string, source: 'mangapill' | 'webtoon' | 'arenascans', mangaId?: string) => {
     // Check if already queued or downloading
     if (downloadQueue.some(item => item.chapter.id === chapter.id) || activeDownloads.includes(chapter.id)) return;
 

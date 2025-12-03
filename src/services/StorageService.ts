@@ -22,9 +22,10 @@ export interface Manga {
     lastReadChapterId?: string;
     lastReadPage?: number;
     readChapters?: string[]; // IDs of read chapters
-    source?: 'mangapill' | 'webtoon';
+    source?: 'mangapill' | 'webtoon' | 'arenascans';
     sourceMangaId?: string;
     preferredBatchSize?: number;
+    alternativeTitles?: string[];
 }
 
 const MANGA_KEY = 'manga_library';
@@ -202,34 +203,36 @@ export const StorageService = {
             // Ignore if exists
         }
 
-        // Write files
-        let processedCount = 0;
-        for (const entry of imageEntries) {
-            // Get base64 directly from JSZip to avoid Blob conversion overhead
-            const base64Image = await (entry as any).async('base64');
+        // Write files in batches to speed up
+        const BATCH_SIZE = 10;
+        for (let i = 0; i < imageEntries.length; i += BATCH_SIZE) {
+            const batch = imageEntries.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(batch.map(async (entry) => {
+                // Get base64 directly from JSZip
+                const base64Image = await (entry as any).async('base64');
 
-            // Sanitize filename to avoid issues
-            const safeName = (entry as any).name.replace(/[^a-zA-Z0-9.-]/g, '_');
-            const imagePath = `${cacheDir}/${safeName}`;
+                // Sanitize filename
+                const safeName = (entry as any).name.replace(/[^a-zA-Z0-9.-]/g, '_');
+                const imagePath = `${cacheDir}/${safeName}`;
 
-            await Filesystem.writeFile({
-                path: imagePath,
-                data: base64Image,
-                directory: Directory.Cache
-            });
+                await Filesystem.writeFile({
+                    path: imagePath,
+                    data: base64Image,
+                    directory: Directory.Cache
+                });
 
-            const uri = await Filesystem.getUri({
-                path: imagePath,
-                directory: Directory.Cache
-            });
+                const uri = await Filesystem.getUri({
+                    path: imagePath,
+                    directory: Directory.Cache
+                });
 
-            imagePaths.push(Capacitor.convertFileSrc(uri.uri));
+                return Capacitor.convertFileSrc(uri.uri);
+            }));
 
-            // Yield to main thread every 5 images to prevent freezing
-            processedCount++;
-            if (processedCount % 5 === 0) {
-                await new Promise(resolve => setTimeout(resolve, 0));
-            }
+            imagePaths.push(...batchResults);
+
+            // Yield to main thread between batches
+            await new Promise(resolve => setTimeout(resolve, 0));
         }
 
         return imagePaths;

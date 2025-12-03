@@ -23,11 +23,7 @@ dist-ssr
 *.sw?
 
 # Debug scripts and artifacts
-debug_*.py
-debug_*.ts
-fetch_*.py
-test_*.py
-debug_output.html
+
 
 # Documentation artifacts
 task.md

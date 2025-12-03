@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion'
 import { X, Settings, Bug, Loader2 } from 'lucide-react';
 import { MangaPillService } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
+import { ArenaScansService } from '../services/ArenaScansService';
 import { StorageService, type Manga, type Chapter } from '../services/StorageService';
 import { DownloadService } from '../services/DownloadService';
 
@@ -33,7 +34,7 @@ interface LoadedChapter {
 // Helper Component for Zoom
 // Helper Component for Zoom
 // Helper Component for Zoom
-const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, onDoubleTap?: () => void }) => {
+const ZoomableImage = ({ src, alt, onDoubleTap, priority = false }: { src: string, alt: string, onDoubleTap?: () => void, priority?: boolean }) => {
     const x = useMotionValue(0);
     const y = useMotionValue(0);
     const scale = useMotionValue(1);
@@ -124,7 +125,34 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
     const [error, setError] = useState(false);
 
+    const [isVisible, setIsVisible] = useState(false);
+
     useEffect(() => {
+        if (priority) {
+            setIsVisible(true);
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0].isIntersecting) {
+                    setIsVisible(true);
+                    observer.disconnect();
+                }
+            },
+            { rootMargin: '2000px' }
+        );
+
+        if (containerRef.current) {
+            observer.observe(containerRef.current);
+        }
+
+        return () => observer.disconnect();
+    }, [priority]);
+
+    useEffect(() => {
+        if (!isVisible) return;
+
         let isMounted = true;
         const fetchImage = async () => {
             // Only use Secure Fetch for remote Webtoon/Naver images
@@ -164,7 +192,7 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
 
         fetchImage();
         return () => { isMounted = false; };
-    }, [src]);
+    }, [src, isVisible]);
 
     if (error) {
         return (
@@ -214,11 +242,39 @@ const ZoomableImage = ({ src, alt, onDoubleTap }: { src: string, alt: string, on
 };
 
 // Simple Secure Image for Vertical Mode
-const SecureImage = ({ src, alt }: { src: string, alt: string }) => {
+const SecureImage = ({ src, alt, priority = false }: { src: string, alt: string, priority?: boolean }) => {
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
     const [error, setError] = useState(false);
 
+    const [isVisible, setIsVisible] = useState(false);
+    const imgRef = useRef<HTMLDivElement>(null);
+
     useEffect(() => {
+        if (priority) {
+            setIsVisible(true);
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0].isIntersecting) {
+                    setIsVisible(true);
+                    observer.disconnect();
+                }
+            },
+            { rootMargin: '2000px' } // Load when within 2000px
+        );
+
+        if (imgRef.current) {
+            observer.observe(imgRef.current);
+        }
+
+        return () => observer.disconnect();
+    }, [priority]);
+
+    useEffect(() => {
+        if (!isVisible) return; // Don't fetch until visible
+
         let isMounted = true;
         const fetchImage = async () => {
             // Only use Secure Fetch for remote Webtoon/Naver images
@@ -258,7 +314,7 @@ const SecureImage = ({ src, alt }: { src: string, alt: string }) => {
 
         fetchImage();
         return () => { isMounted = false; };
-    }, [src]);
+    }, [src, isVisible]);
 
     if (error) {
         return (
@@ -270,7 +326,7 @@ const SecureImage = ({ src, alt }: { src: string, alt: string }) => {
 
     if (!blobUrl) {
         return (
-            <div className="w-full h-96 flex items-center justify-center text-gray-500 bg-gray-900 animate-pulse">
+            <div ref={imgRef} className="w-full h-96 flex items-center justify-center text-gray-500 bg-gray-900 animate-pulse">
                 <Loader2 className="animate-spin" />
             </div>
         );
@@ -359,10 +415,16 @@ export const Reader: React.FC<ReaderProps> = ({
     const hasInitialScrolledRef = useRef(false);
     const completedChaptersRef = useRef<Set<string>>(new Set());
     const nearBottomLoggedRef = useRef<Set<string>>(new Set());
+    const hasUserInteractedRef = useRef(false);
 
     // Save progress to storage
     const saveProgress = async (updates: { currentChapterId?: string, completedChapterId?: string, newChapter?: Chapter, currentPage?: number }) => {
         if (!manga) return;
+
+        // Only save reading position if user has interacted (prevents overwriting resume position with initial load glitches)
+        if ((updates.currentChapterId || updates.currentPage !== undefined) && !hasUserInteractedRef.current && !updates.completedChapterId && !updates.newChapter) {
+            return;
+        }
 
         try {
             const updatedManga = { ...manga };
@@ -461,6 +523,67 @@ export const Reader: React.FC<ReaderProps> = ({
                 } else {
                     addLog(`Could not find current chapter ${lastLoaded.title} (Num: ${lastNum}) in online list.`);
                 }
+            } else if (manga.source === 'arenascans' || loadedChapters[loadedChapters.length - 1].id.startsWith('AS_')) {
+                // ArenaScans Logic (Direct or Hybrid)
+                const lastLoaded = loadedChapters[loadedChapters.length - 1];
+                addLog(`ArenaScans: Looking for next chapter after ${lastLoaded.title}...`);
+
+                let slug = manga.source === 'arenascans' ? manga.sourceMangaId : null;
+
+                // If slug is numeric, it's likely a Webtoon ID (hybrid mode), so we must search for the real slug
+                if (slug && /^\d+$/.test(slug)) {
+                    slug = null;
+                }
+
+                // Hybrid mode: Search for slug if not known
+                if (!slug) {
+                    addLog(`ArenaScans: Hybrid mode, searching for slug...`);
+                    const queries = [manga.title, ...(manga.alternativeTitles || [])];
+                    for (const q of queries) {
+                        if (!q) continue;
+                        try {
+                            const results = await ArenaScansService.search(q);
+                            if (results.length > 0) {
+                                slug = results[0].slug;
+                                addLog(`ArenaScans: Found slug ${slug} for query ${q}`);
+                                break;
+                            }
+                        } catch (e) {
+                            console.error('ArenaScans search error', e);
+                        }
+                    }
+                }
+
+                if (slug) {
+                    const arenaChapters = await ArenaScansService.getChapters(slug);
+
+                    // Extract number from last loaded title
+                    const getNum = (t: string) => {
+                        const m = t.match(/Episode\s*(\d+)/i) || t.match(/Chapter\s*(\d+)/i) || t.match(/(\d+)/);
+                        return m ? parseFloat(m[1]) : -1;
+                    };
+                    const lastNum = getNum(lastLoaded.title);
+                    const targetNum = lastNum + 1;
+
+                    addLog(`ArenaScans: Looking for Chapter/Episode ${targetNum}`);
+
+                    const targetChapter = arenaChapters.find(c => Math.abs(c.number - targetNum) < 0.1);
+
+                    if (targetChapter) {
+                        addLog(`ArenaScans: Found ${targetChapter.title}`);
+                        nextChapterData = {
+                            id: targetChapter.id,
+                            title: targetChapter.title,
+                            // map other fields if needed
+                        };
+                        nextChapterPages = await ArenaScansService.getPages(targetChapter.url);
+                    } else {
+                        addLog(`ArenaScans: Chapter ${targetNum} not found.`);
+                    }
+                } else {
+                    addLog(`ArenaScans: Could not find manga slug.`);
+                }
+
             } else if (manga.source === 'webtoon') {
                 const mangaId = manga.sourceMangaId;
                 const lastLoaded = loadedChapters[loadedChapters.length - 1];
@@ -583,11 +706,15 @@ export const Reader: React.FC<ReaderProps> = ({
                     const downloadAndSave = async () => {
                         try {
                             addLog(`Auto-downloading ${nextChapterData.title} to local storage...`);
+                            // Determine Referer based on source
+                            const isArena = nextChapterData.id.startsWith('AS_') || manga.source === 'arenascans';
+                            const referer = isArena ? 'https://arenascan.com/' : 'https://www.webtoons.com/';
+
                             const fileName = await DownloadService.downloadChapter(
                                 nextChapterData.title,
                                 manga.title,
                                 async () => nextChapterPages, // Pages already fetched
-                                { 'Referer': 'https://www.webtoons.com/' }
+                                { 'Referer': referer }
                             );
 
                             addLog(`Downloaded ${nextChapterData.title} as ${fileName}`);
@@ -752,7 +879,7 @@ export const Reader: React.FC<ReaderProps> = ({
                         const images = chapterEl.querySelectorAll('.chapter-image');
                         if (images[initialPage]) {
                             addLog(`Found page ${initialPage} on attempt ${attempts}, scrolling...`);
-                            images[initialPage].scrollIntoView({ block: 'start' });
+                            images[initialPage].scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
                             hasInitialScrolledRef.current = true;
                             setCurrentPage(initialPage as number); // Sync UI immediately
                             clearInterval(interval);
@@ -995,6 +1122,9 @@ export const Reader: React.FC<ReaderProps> = ({
         if (isNearBottomOfChapter) {
             const lastLoaded = loadedChapters[loadedChapters.length - 1];
             if (lastLoaded.status !== 'loaded') return;
+
+            // Only load next if we are reading the last loaded chapter
+            if (activeChapterIdRef.current !== lastLoaded.id) return;
 
             const currentIndex = allChapters.findIndex(c => c.id === lastLoaded.id);
             if (currentIndex !== -1 && currentIndex < allChapters.length - 1) {
@@ -1241,6 +1371,10 @@ export const Reader: React.FC<ReaderProps> = ({
                         ref={verticalContainerRef}
                         className="w-full h-full overflow-y-auto overflow-x-hidden scroll-smooth"
                         onScroll={handleScroll}
+                        onTouchStart={() => { hasUserInteractedRef.current = true; }}
+                        onMouseDown={() => { hasUserInteractedRef.current = true; }}
+                        onWheel={() => { hasUserInteractedRef.current = true; }}
+                        onKeyDown={() => { hasUserInteractedRef.current = true; }}
                     >
                         {loadedChapters.map((chapter) => (
                             <div key={chapter.id} id={`chapter-${chapter.id}`} className="flex flex-col items-center min-h-screen" data-chapter-id={chapter.id}>
@@ -1260,6 +1394,7 @@ export const Reader: React.FC<ReaderProps> = ({
                                         <SecureImage
                                             src={page}
                                             alt={`Page ${index + 1}`}
+                                            priority={index < 3}
                                         />
                                     </div>
                                 ))}
@@ -1281,6 +1416,10 @@ export const Reader: React.FC<ReaderProps> = ({
                         className={`w-full h-full overflow-x-auto overflow-y-hidden flex flex-row snap-x snap-mandatory`}
                         dir={readingMode === 'rtl' ? 'rtl' : 'ltr'}
                         onScroll={handleHorizontalScroll}
+                        onTouchStart={() => { hasUserInteractedRef.current = true; }}
+                        onMouseDown={() => { hasUserInteractedRef.current = true; }}
+                        onWheel={() => { hasUserInteractedRef.current = true; }}
+                        onKeyDown={() => { hasUserInteractedRef.current = true; }}
                     >
                         {loadedChapters.map((chapter) => (
                             <div key={chapter.id} className="flex flex-shrink-0" data-chapter-id={chapter.id}>
@@ -1296,6 +1435,7 @@ export const Reader: React.FC<ReaderProps> = ({
                                             src={page}
                                             alt={`Page ${index + 1}`}
                                             onDoubleTap={() => setShowControls(prev => !prev)}
+                                            priority={index < 3}
                                         />
                                     </div>
                                 ))}

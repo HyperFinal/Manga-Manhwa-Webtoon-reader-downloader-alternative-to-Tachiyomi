@@ -32,7 +32,7 @@ export const DownloadService = {
 
             // 2. Download each image
             // 2. Download each image in batches to avoid rate limiting and network congestion
-            const BATCH_SIZE = 6;
+            const BATCH_SIZE = 10; // Increased from 6
             for (let i = 0; i < imageUrls.length; i += BATCH_SIZE) {
                 const batch = imageUrls.slice(i, i + BATCH_SIZE);
                 await Promise.all(batch.map(async (url, batchIndex) => {
@@ -40,9 +40,8 @@ export const DownloadService = {
                     let retries = 3;
                     while (retries > 0) {
                         try {
-                            let blob: Blob;
-
-
+                            let data: Blob | string;
+                            let isBase64 = false;
 
                             // Use CapacitorHttp if headers are needed (Webtoon), otherwise standard fetch (MangaDex)
                             if (Object.keys(headers).length > 0) {
@@ -50,29 +49,26 @@ export const DownloadService = {
                                 const response = await CapacitorHttp.get({
                                     url: url,
                                     headers: headers,
-                                    responseType: 'blob',
-                                    connectTimeout: 5000,
-                                    readTimeout: 5000
+                                    responseType: 'blob', // Actually returns base64 string in 'data' field for 'blob' responseType in some versions, but let's verify. 
+                                    // Wait, CapacitorHttp documentation says responseType: 'blob' returns base64 string in data.
+                                    connectTimeout: 10000, // Increased to 10s
+                                    readTimeout: 10000
                                 });
 
-                                const base64 = response.data;
-                                const byteCharacters = atob(base64);
-                                const byteNumbers = new Array(byteCharacters.length);
-                                for (let k = 0; k < byteCharacters.length; k++) {
-                                    byteNumbers[k] = byteCharacters.charCodeAt(k);
-                                }
-                                const byteArray = new Uint8Array(byteNumbers);
-                                blob = new Blob([byteArray], { type: 'image/jpeg' });
+                                // Optimization: Pass base64 directly to JSZip
+                                data = response.data;
+                                isBase64 = true;
                             } else {
                                 // Standard fetch with AbortController
                                 const controller = new AbortController();
-                                const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+                                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
                                 try {
                                     const response = await fetch(url, { signal: controller.signal });
                                     clearTimeout(timeoutId);
                                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                                    blob = await response.blob();
+                                    data = await response.blob();
+                                    isBase64 = false;
                                 } catch (fetchErr) {
                                     clearTimeout(timeoutId);
                                     throw fetchErr;
@@ -85,7 +81,11 @@ export const DownloadService = {
 
                             const filename = `${String(index + 1).padStart(3, '0')}.${extension}`;
 
-                            zip.file(filename, blob);
+                            if (isBase64) {
+                                zip.file(filename, data as string, { base64: true });
+                            } else {
+                                zip.file(filename, data as Blob);
+                            }
 
                             completed++;
                             if (onProgress) {
@@ -96,7 +96,7 @@ export const DownloadService = {
                             console.error(`Failed to download page ${index + 1}, retries left: ${retries - 1}`, err);
                             retries--;
                             if (retries === 0) throw err;
-                            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
+                            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
                         }
                     }
                 }));

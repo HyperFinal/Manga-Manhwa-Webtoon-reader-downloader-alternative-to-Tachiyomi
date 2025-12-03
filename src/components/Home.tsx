@@ -195,7 +195,8 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
             genres: metadata.genres?.map(g => g.name) || [],
             status: metadata.status,
             totalChapters: metadata.chapters,
-            chapters: []
+            chapters: [],
+            alternativeTitles: metadata.alternativeTitles || []
         };
 
         const updatedLibrary = [...library, newManga];

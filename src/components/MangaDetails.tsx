@@ -14,7 +14,7 @@ interface MangaDetailsProps {
     downloadQueue: string[];
     activeDownloads: string[];
     downloadProgress: Record<string, number>;
-    onQueueDownload: (chapter: any, mangaTitle: string, source: 'mangapill' | 'webtoon', mangaId?: string) => void;
+    onQueueDownload: (chapter: any, mangaTitle: string, source: 'mangapill' | 'webtoon' | 'arenascans', mangaId?: string) => void;
 }
 
 export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRead, onUpdateManga, onRemove, downloadQueue, activeDownloads, downloadProgress, onQueueDownload }) => {
@@ -277,12 +277,32 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                 <div className="flex gap-3 mb-4">
                                     <button
                                         onClick={() => {
-                                            if (manga.lastReadChapterId) {
+                                            // 1. Resume if possible
+                                            if (manga.lastReadChapterId && manga.chapters.some(c => c.id === manga.lastReadChapterId)) {
                                                 const chapter = manga.chapters.find(c => c.id === manga.lastReadChapterId);
                                                 if (chapter) {
                                                     handleReadChapter(chapter);
+                                                    return;
                                                 }
-                                            } else if (regularChapters.length > 0) {
+                                            }
+
+                                            // 2. Find first unread chapter (Regular first, then Special)
+                                            const readSet = new Set(manga.readChapters || []);
+
+                                            const firstUnreadRegular = regularChapters.find(c => !readSet.has(c.id));
+                                            if (firstUnreadRegular) {
+                                                handleReadChapter(firstUnreadRegular);
+                                                return;
+                                            }
+
+                                            const firstUnreadSpecial = specialChapters.find(c => !readSet.has(c.id));
+                                            if (firstUnreadSpecial) {
+                                                handleReadChapter(firstUnreadSpecial);
+                                                return;
+                                            }
+
+                                            // 3. Fallback: Start from beginning (Regular first)
+                                            if (regularChapters.length > 0) {
                                                 handleReadChapter(regularChapters[0]);
                                             } else if (specialChapters.length > 0) {
                                                 handleReadChapter(specialChapters[0]);
@@ -291,7 +311,7 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                         className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-200 transition-colors"
                                     >
                                         <Play size={20} fill="currentColor" />
-                                        {manga.lastReadChapterId ? 'Resume' : 'Start Reading'}
+                                        {manga.lastReadChapterId && manga.chapters.some(c => c.id === manga.lastReadChapterId) ? 'Resume' : 'Start Reading'}
                                     </button>
                                     <button
                                         onClick={() => fileInputRef.current?.click()}
