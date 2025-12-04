@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion';
 import { X, Settings, Bug, Loader2 } from 'lucide-react';
+import { AppConfig } from '../config/AppConfig';
 import { MangaPillService } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
 import { ArenaScansService } from '../services/ArenaScansService';
@@ -140,7 +141,7 @@ const ZoomableImage = ({ src, alt, onDoubleTap, priority = false }: { src: strin
                     observer.disconnect();
                 }
             },
-            { rootMargin: '2000px' }
+            { rootMargin: '6000px' }
         );
 
         if (containerRef.current) {
@@ -366,6 +367,12 @@ export const Reader: React.FC<ReaderProps> = ({
     const [isLoadingNextOnline, setIsLoadingNextOnline] = useState(false); // New state
     const [allChapters, setAllChapters] = useState<Chapter[]>(chapters); // Track all chapters including online ones
 
+    // Helper to extract number
+    const getChapterNumber = (title: string) => {
+        const m = title.match(/Episode\s*(\d+(\.\d+)?)/i) || title.match(/Chapter\s*(\d+(\.\d+)?)/i) || title.match(/(\d+(\.\d+)?)/);
+        return m ? parseFloat(m[1] || m[0]) : -1;
+    };
+
     // Sync allChapters when props change (initial load)
     useEffect(() => {
         setAllChapters(prev => {
@@ -376,18 +383,15 @@ export const Reader: React.FC<ReaderProps> = ({
                     newChapters.push(c);
                 }
             });
-            // Sort by something? No, trust order.
-            // Actually, if we are just starting, props.chapters is the truth.
-            // But if we added online chapters, we want to keep them.
-            // For now, let's just assume props.chapters is the base.
-            if (prev.length === 0) return chapters;
-            return newChapters;
+
+            // SORT by chapter number to ensure correct navigation order
+            return newChapters.sort((a, b) => getChapterNumber(a.title) - getChapterNumber(b.title));
         });
     }, [chapters]);
 
     // Debug State
     const [debugLogs, setDebugLogs] = useState<string[]>([]);
-    const [showDebug, setShowDebug] = useState(true);
+    const [showDebug, setShowDebug] = useState(false);
 
     const addLog = (msg: string) => {
         console.log(msg);
@@ -690,6 +694,24 @@ export const Reader: React.FC<ReaderProps> = ({
             }
 
             if (nextChapterData && nextChapterPages.length > 0) {
+                // Check if we ALREADY have this chapter locally (by title/number)
+                const existingLocal = allChapters.find(c => {
+                    const cNum = getChapterNumber(c.title);
+                    const nNum = getChapterNumber(nextChapterData.title);
+                    return cNum === nNum && cNum !== -1;
+                });
+
+                if (existingLocal && existingLocal.fileName !== 'online') {
+                    addLog(`Chapter ${nextChapterData.title} already exists locally as ${existingLocal.fileName}. Skipping download.`);
+                    // We don't need to do anything, as handleScroll will pick it up naturally now that allChapters is sorted.
+                    // But we should ensure it's in loadedChapters if not already.
+                    if (!loadedChapters.some(c => c.id === existingLocal.id)) {
+                        // Load the local chapter
+                        loadChapter(existingLocal, 'append');
+                    }
+                    return;
+                }
+
                 const newChapter: LoadedChapter = {
                     id: nextChapterData.id, // Use online ID
                     title: nextChapterData.title,
@@ -1201,7 +1223,38 @@ export const Reader: React.FC<ReaderProps> = ({
             const totalPages = lastChapter.pages.length;
             const thresholdPage = Math.max(0, totalPages - 5);
 
-            if (activeChapterId === lastChapter.id && currentPage >= thresholdPage) {
+            // Fallback: Check if the last page is visible
+            let isAtEnd = false;
+            const lastPageId = `page-${lastChapter.id}-${lastChapter.pages.length - 1}`;
+            const lastPageEl = document.getElementById(lastPageId);
+
+            if (lastPageEl) {
+                const rect = lastPageEl.getBoundingClientRect();
+                const containerRect = container.getBoundingClientRect();
+
+                // Check if last page is within view (with some buffer)
+                // In RTL, "end" is the leftmost page. In LTR, it's the rightmost.
+                // But simplified: if the last page is visible, we are at the end.
+                const isVisible = (
+                    rect.top < containerRect.bottom &&
+                    rect.bottom > containerRect.top &&
+                    rect.left < containerRect.right &&
+                    rect.right > containerRect.left
+                );
+
+                if (isVisible) {
+                    // Check if we are close to the "end" edge
+                    if (isRTL) {
+                        // RTL End is Left edge. Check if page is near left edge of container
+                        isAtEnd = rect.left <= containerRect.left + 50;
+                    } else {
+                        // LTR End is Right edge. Check if page is near right edge of container
+                        isAtEnd = rect.right >= containerRect.right - 50;
+                    }
+                }
+            }
+
+            if ((activeChapterId === lastChapter.id && currentPage >= thresholdPage) || isAtEnd) {
                 const currentIndex = chapters.findIndex(c => c.id === lastChapter.id);
 
                 if (currentIndex < chapters.length - 1) {
@@ -1314,12 +1367,14 @@ export const Reader: React.FC<ReaderProps> = ({
                             >
                                 <Settings size={24} />
                             </button>
-                            <button
-                                onClick={() => setShowDebug(!showDebug)}
-                                className={`p-2 rounded-full text-white backdrop-blur-md ${showDebug ? 'bg-green-900/50 text-green-400' : 'bg-black/50'}`}
-                            >
-                                <Bug size={24} />
-                            </button>
+                            {AppConfig.ENABLE_DEBUG_FEATURES && (
+                                <button
+                                    onClick={() => setShowDebug(!showDebug)}
+                                    className={`p-2 rounded-full text-white backdrop-blur-md ${showDebug ? 'bg-green-900/50 text-green-400' : 'bg-black/50'}`}
+                                >
+                                    <Bug size={24} />
+                                </button>
+                            )}
                         </div>
                     </motion.div>
                 )}
@@ -1412,13 +1467,76 @@ export const Reader: React.FC<ReaderProps> = ({
                     </div>
                 ) : (
                     <div
-                        ref={horizontalContainerRef}
+                        ref={(node) => {
+                            horizontalContainerRef.current = node;
+                            if (node) {
+                                let wheelTimeout: NodeJS.Timeout;
+                                let accumulatedDelta = 0;
+                                let lastScrollTime = 0;
+                                const THRESHOLD = 60;
+                                const COOLDOWN = 800; // Increased cooldown for slower animation
+
+                                // Custom smooth scroll function
+                                const smoothScrollBy = (element: HTMLElement, amount: number, duration: number) => {
+                                    const start = element.scrollLeft;
+                                    const startTime = performance.now();
+
+                                    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+                                    const animate = (currentTime: number) => {
+                                        const elapsed = currentTime - startTime;
+                                        const progress = Math.min(elapsed / duration, 1);
+                                        const easedProgress = easeOutCubic(progress);
+
+                                        element.scrollLeft = start + (amount * easedProgress);
+
+                                        if (progress < 1) {
+                                            requestAnimationFrame(animate);
+                                        }
+                                    };
+
+                                    requestAnimationFrame(animate);
+                                };
+
+                                const handleWheel = (e: WheelEvent) => {
+                                    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+                                        e.preventDefault();
+
+                                        if (Date.now() - lastScrollTime < COOLDOWN) {
+                                            accumulatedDelta = 0;
+                                            return;
+                                        }
+
+                                        accumulatedDelta += e.deltaX;
+
+                                        if (Math.abs(accumulatedDelta) > THRESHOLD) {
+                                            const direction = accumulatedDelta > 0 ? 1 : -1;
+                                            const container = horizontalContainerRef.current;
+                                            if (container) {
+                                                const pageWidth = container.clientWidth;
+                                                // Use custom smooth scroll with 600ms duration
+                                                smoothScrollBy(container, direction * pageWidth, 600);
+
+                                                lastScrollTime = Date.now();
+                                            }
+                                            accumulatedDelta = 0;
+                                        }
+
+                                        clearTimeout(wheelTimeout);
+                                        wheelTimeout = setTimeout(() => {
+                                            accumulatedDelta = 0;
+                                        }, 100);
+                                    }
+                                };
+                                node.addEventListener('wheel', handleWheel, { passive: false });
+                                return () => node.removeEventListener('wheel', handleWheel);
+                            }
+                        }}
                         className={`w-full h-full overflow-x-auto overflow-y-hidden flex flex-row snap-x snap-mandatory`}
                         dir={readingMode === 'rtl' ? 'rtl' : 'ltr'}
                         onScroll={handleHorizontalScroll}
                         onTouchStart={() => { hasUserInteractedRef.current = true; }}
                         onMouseDown={() => { hasUserInteractedRef.current = true; }}
-                        onWheel={() => { hasUserInteractedRef.current = true; }}
                         onKeyDown={() => { hasUserInteractedRef.current = true; }}
                     >
                         {loadedChapters.map((chapter) => (
@@ -1435,7 +1553,7 @@ export const Reader: React.FC<ReaderProps> = ({
                                             src={page}
                                             alt={`Page ${index + 1}`}
                                             onDoubleTap={() => setShowControls(prev => !prev)}
-                                            priority={index < 3}
+                                            priority={index < 3 || Math.abs(index - currentPage) < 3}
                                         />
                                     </div>
                                 ))}
@@ -1447,3 +1565,4 @@ export const Reader: React.FC<ReaderProps> = ({
         </div>
     );
 };
+

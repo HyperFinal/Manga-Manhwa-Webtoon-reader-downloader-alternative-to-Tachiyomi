@@ -4,7 +4,7 @@ import type { MangaPillChapter } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
 import type { WebtoonChapter } from '../services/WebtoonService';
 import type { Manga } from '../services/StorageService';
-import { Check, RefreshCw, ChevronDown, Loader2, Download, Settings, X, Lock, Search, ExternalLink } from 'lucide-react';
+import { Check, RefreshCw, ChevronDown, Loader2, Download, Settings, X, Lock, Search, ExternalLink, Bug } from 'lucide-react';
 import { StorageService } from '../services/StorageService';
 import { ArenaScansService } from '../services/ArenaScansService';
 
@@ -45,13 +45,69 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     onQueueDownload,
     onUpdateManga
 }) => {
-    const [chapters, setChapters] = useState<(MangaPillChapter | WebtoonChapter)[]>(cachedChapters);
+    // Validate cached chapters: generic validation for any manga (not just One Piece)
+    const isValidCache = (chapters: (MangaPillChapter | WebtoonChapter)[]) => {
+        if (chapters.length === 0) return false;
+
+        // Check first chapter title - should be valid chapter format, not too long, no databook keywords
+        const firstTitle = chapters[0].title.toLowerCase();
+        const hasChapterPattern = /chapter\s+\d+|episode\s+\d+|ep\.\s*\d+|\d+/.test(firstTitle);
+        const hasInvalidPatterns = firstTitle.length > 80 || /databook|profile|character|biography|guide|encyclopedia/i.test(firstTitle);
+
+        return hasChapterPattern && !hasInvalidPatterns;
+    };
+
+    const validCachedChapters = isValidCache(cachedChapters) ? cachedChapters : [];
+    console.log(`[Cache] Validation: ${validCachedChapters.length > 0 ? 'VALID' : 'INVALID'} (${cachedChapters.length} chapters in cache)`);
+    const [chapters, setChaptersInternal] = useState<(MangaPillChapter | WebtoonChapter)[]>(validCachedChapters);
     const [loading, setLoading] = useState(false);
     const [loadingProgress, setLoadingProgress] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
     const [lockedCount, setLockedCount] = useState(0);
     const [showUnlockDialog, setShowUnlockDialog] = useState(false);
     const [unlockChapter, setUnlockChapter] = useState<WebtoonChapter | null>(null);
+    const [showDebug, setShowDebug] = useState(false);
+
+    // Debug overlay state
+    // Debug overlay state
+    const [debugInfo, setDebugInfo] = useState({
+        cacheValidation: validCachedChapters.length > 0 ? 'VALID' : 'INVALID',
+        cachedCount: cachedChapters.length,
+        loadedMangaId: '',
+        loadedMangaTitle: '',
+        searchQueries: [] as string[],
+        bestCandidate: '',
+        ratio: 0,
+        loadChaptersCalls: 0,
+        setChaptersLog: [] as string[],
+        lifecycleLog: [] as string[],
+        loadChaptersLog: [] as string[],
+        raceLog: '',
+        lastProtection: ''
+    });
+
+    const logLifecycle = (msg: string) => {
+        console.log(msg);
+        setDebugInfo(prev => ({
+            ...prev,
+            lifecycleLog: [...prev.lifecycleLog.slice(-4), `${new Date().toISOString().split('T')[1].slice(0, 8)} | ${msg}`]
+        }));
+    };
+
+    // Wrapper for setChapters to track all calls
+    const setChapters = (newChapters: (MangaPillChapter | WebtoonChapter)[]) => {
+        const caller = new Error().stack?.split('\n')[2]?.trim() || 'Unknown';
+        const logEntry = `${new Date().toISOString().split('T')[1].slice(0, 8)} | ${newChapters.length} ch | Caller: ${caller.substring(0, 50)}...`;
+        console.log(`[SETCHAPTERS] Called with ${newChapters.length} chapters. First: "${newChapters[0]?.title || 'N/A'}"`);
+        console.log(`[SETCHAPTERS] Caller: ${caller}`);
+
+        setDebugInfo(prev => ({
+            ...prev,
+            setChaptersLog: [...prev.setChaptersLog.slice(-4), logEntry]
+        }));
+
+        setChaptersInternal(newChapters);
+    };
 
     // Destructure view state for easier access
     const { selectedBatch, currentMangaId, webtoonMaxPage, source } = viewState;
@@ -59,6 +115,10 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     const [visibleCount, setVisibleCount] = useState(20);
     const observerTarget = useRef(null);
     const sourceRef = useRef(source);
+    const loadedMangaIdRef = useRef<string | null>(null); // Track loaded manga to prevent overwrites
+    const loadedChapterCountRef = useRef(0); // Track chapter count to prevent downgrade
+    const isLoadingRef = useRef(false); // Prevent concurrent loadChapters calls
+    const searchGenerationRef = useRef(0); // Track search generation to invalidate old calls
 
     const [isBatchDropdownOpen, setIsBatchDropdownOpen] = useState(false);
     const batchDropdownRef = useRef<HTMLDivElement>(null);
@@ -68,15 +128,35 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     const [showBatchPrompt, setShowBatchPrompt] = useState(false);
     const [tempBatchSize, setTempBatchSize] = useState<string>('100');
 
-    // Initialize source if not set (first load)
+    // Log mount/unmount
     useEffect(() => {
-        if (!viewState.source) {
-            const isWebtoonType = currentManga.type === 'Manhwa' ||
-                currentManga.type === 'Manhua' ||
-                currentManga.genres?.some(g => g.toLowerCase() === 'webtoon');
-            onViewStateChange({ source: isWebtoonType ? 'webtoon' : 'mangapill' });
-        }
+        logLifecycle(`MOUNTED: ${mangaTitle} (ID: ${currentManga.id})`);
+        return () => console.log(`[LIFECYCLE] OnlineChapterList UNMOUNTED`);
     }, []);
+
+    // Clear chapters when manga changes to prevent ghost data
+    useEffect(() => {
+        logLifecycle(`ID CHANGED: ${currentManga.id}`);
+        setChapters([]);
+        setError(null);
+        setLoading(true);
+        loadedMangaIdRef.current = null; // Reset protection when manga changes
+        isLoadingRef.current = false; // Reset lock
+    }, [currentManga.id]);
+
+    // Initialize/Enforce source based on type
+    useEffect(() => {
+        const isWebtoonType = currentManga.type === 'Manhwa' ||
+            currentManga.type === 'Manhua' ||
+            currentManga.genres?.some(g => g.toLowerCase() === 'webtoon');
+
+        const targetSource = isWebtoonType ? 'webtoon' : 'mangapill';
+
+        // Only update if different to avoid loops
+        if (viewState.source !== targetSource) {
+            onViewStateChange({ source: targetSource });
+        }
+    }, [currentManga.id]);
 
     // Check for preferred batch size on mount/manga change
     useEffect(() => {
@@ -113,6 +193,8 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     const isWebtoon = source === 'webtoon';
     useEffect(() => {
         sourceRef.current = source;
+        loadedMangaIdRef.current = null; // Reset protection when source changes
+        isLoadingRef.current = false; // Reset lock
         if (chapters.length === 0 && !showBatchPrompt) {
             loadChapters();
         }
@@ -141,11 +223,30 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
     }, []);
 
     const loadChapters = async (retryCount = 0, queryOverride?: string) => {
+        const callId = Math.random().toString(36).substring(7);
+        const logPrefix = `[${callId}]`;
+
+        // Increment generation ID for this new call
+        const localGeneration = ++searchGenerationRef.current;
+
+        const caller = new Error().stack?.split('\n')[2]?.trim() || 'Unknown';
+        const logEntry = `${new Date().toLocaleTimeString()} | ${logPrefix} (Gen:${localGeneration}) START | Caller: ${caller}`;
+
+        console.log(`${logPrefix} loadChapters called. Gen: ${localGeneration}, Source: ${source}, Retry: ${retryCount}, Query: ${queryOverride}`);
+
+        setDebugInfo(prev => ({
+            ...prev,
+            loadChaptersCalls: prev.loadChaptersCalls + 1,
+            loadChaptersLog: [...prev.loadChaptersLog, logEntry]
+        }));
+
+        isLoadingRef.current = true;
+
         const currentSource = source;
         setLoading(true);
         setLoadingProgress('');
         setError(null);
-        setLockedCount(0); // Reset locked count
+        setLockedCount(0);
 
         // Only reset chapters if we are changing source or don't have them
         if (currentSource !== sourceRef.current) {
@@ -154,99 +255,249 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
 
         setVisibleCount(20);
 
+        // Wrapper for setChapters to log who calls it AND CHECK GENERATION
+        const originalSetChapters = setChapters;
+        // @ts-ignore
+        const setChaptersLocal = (newChapters: any[]) => {
+            // ZOMBIE CHECK
+            if (searchGenerationRef.current !== localGeneration) {
+                const msg = `${logPrefix} [ZOMBIE KILL] setChapters BLOCKED. Current Gen: ${searchGenerationRef.current}, My Gen: ${localGeneration}`;
+                console.warn(msg);
+                setDebugInfo(prev => ({
+                    ...prev,
+                    setChaptersLog: [...prev.setChaptersLog, msg]
+                }));
+                return; // DIE
+            }
+
+            const count = newChapters.length;
+            const msg = `${new Date().toLocaleTimeString()} | ${logPrefix} setChapters: ${count} ch`;
+            console.log(msg);
+            setDebugInfo(prev => ({
+                ...prev,
+                setChaptersLog: [...prev.setChaptersLog, msg]
+            }));
+            originalSetChapters(newChapters);
+        };
+
         // Prepare list of titles to search
-        // If queryOverride is present, use ONLY that.
-        // Otherwise, use mangaTitle + alternativeTitles
         let searchQueries = [mangaTitle];
         if (queryOverride) {
             searchQueries = [queryOverride];
         } else {
-            // Check if we have alternative titles
             let alts = currentManga.alternativeTitles || [];
-
-            // If no alternative titles, try to fetch them on the fly (for existing library items)
-            if (alts.length === 0) {
-                try {
-                    console.log(`[SmartFallback] No alternative titles found. Fetching from Jikan...`);
-                    const { MangaService } = await import('../services/MangaService');
-                    const metadata = await MangaService.searchManga(mangaTitle);
-                    if (metadata.length > 0 && metadata[0].alternativeTitles) {
-                        alts = metadata[0].alternativeTitles;
-                        console.log(`[SmartFallback] Found alternatives:`, alts);
-
-                        // Persist to storage for future use
-                        const updatedManga = { ...currentManga, alternativeTitles: alts };
-                        StorageService.saveManga(updatedManga); // Fire and forget
-                        onUpdateManga(updatedManga);
-                    }
-                } catch (e) {
-                    console.warn(`[SmartFallback] Failed to fetch alternatives`, e);
-                }
-            }
-
             if (alts.length > 0) {
                 const uniqueAlts = alts.filter(t => t.toLowerCase() !== mangaTitle.toLowerCase());
                 searchQueries = [...searchQueries, ...uniqueAlts];
             }
         }
+        // Deduplicate
+        searchQueries = [...new Set(searchQueries)];
+
+        setDebugInfo(prev => ({ ...prev, searchQueries }));
 
         try {
             let foundChapters = false;
 
-            for (const query of searchQueries) {
-                if (sourceRef.current !== currentSource) return;
+            if (currentSource === 'mangapill') {
+                console.log(`${logPrefix} Searching MangaPill. Queries:`, searchQueries);
 
-                // Update loading progress to show what we are searching
-                if (searchQueries.length > 1) {
-                    setLoadingProgress(`Searching for "${query}"...`);
-                }
+                // Run all searches in parallel
+                const searchPromises = searchQueries.map(q => MangaPillService.searchManga(q).catch(() => []));
+                const resultsArrays = await Promise.all(searchPromises);
 
-                if (currentSource === 'mangapill') {
-                    console.log(`Searching MangaPill for: ${query}`);
-                    const searchResults = await MangaPillService.searchManga(query);
+                // Check generation after await
+                if (searchGenerationRef.current !== localGeneration) return;
 
-                    if (searchResults.length > 0) {
-                        const manga = searchResults[0];
-                        const slug = manga.url.split('/').pop() || '';
-                        const chapterList = await MangaPillService.getChapters(manga.id, slug);
+                // Flatten ALL results
+                const allResults = resultsArrays.flat();
+                console.log(`${logPrefix} Found ${allResults.length} candidates.`);
 
-                        // Sort ascending
-                        chapterList.sort((a, b) => parseFloat(a.number) - parseFloat(b.number));
-                        setChapters(chapterList);
-                        foundChapters = true;
-                        break; // Found it!
+                if (allResults.length > 0) {
+                    // Smart Matching
+                    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const levenshtein = (a: string, b: string): number => {
+                        const matrix = [];
+                        for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+                        for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+                        for (let i = 1; i <= b.length; i++) {
+                            for (let j = 1; j <= a.length; j++) {
+                                if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                                    matrix[i][j] = matrix[i - 1][j - 1];
+                                } else {
+                                    matrix[i][j] = Math.min(
+                                        matrix[i - 1][j - 1] + 1,
+                                        matrix[i][j - 1] + 1,
+                                        matrix[i - 1][j] + 1
+                                    );
+                                }
+                            }
+                        }
+                        return matrix[b.length][a.length];
+                    };
+
+                    const target = normalize(currentManga.title);
+
+                    // Score candidates
+                    const scoredCandidates = allResults.map(result => {
+                        const source = normalize(result.title);
+                        let minDistance = Infinity;
+
+                        if (source === target) {
+                            minDistance = 0;
+                        } else {
+                            minDistance = levenshtein(source, target);
+                        }
+
+                        const maxLen = Math.max(target.length, source.length);
+                        const ratio = maxLen > 0 ? minDistance / maxLen : 1;
+
+                        return { ...result, score: ratio };
+                    });
+
+                    // Top 3
+                    const topCandidates = scoredCandidates
+                        .filter(c => c.score < 0.6)
+                        .sort((a, b) => a.score - b.score)
+                        .slice(0, 3);
+
+                    if (topCandidates.length === 0) {
+                        console.warn(`${logPrefix} No good candidates found.`);
+                        setDebugInfo(prev => ({ ...prev, bestCandidate: 'None (Low Score)', ratio: scoredCandidates[0]?.score || 1 }));
+                        return;
                     }
-                } else if (currentSource === 'arenascans') {
-                    console.log(`Searching ArenaScans for: ${query}`);
-                    const searchResults = await ArenaScansService.search(query);
 
-                    if (searchResults.length > 0) {
-                        const manga = searchResults[0];
-                        const chapterListRaw = await ArenaScansService.getChapters(manga.slug);
+                    console.log(`${logPrefix} Top 3 candidates:`, topCandidates.map(c => `${c.title} (ID:${c.id})`));
 
-                        const chapterList: WebtoonChapter[] = chapterListRaw.map(ch => ({
-                            id: ch.id,
-                            title: ch.title,
-                            date: '',
-                            url: ch.url
+                    // CHAPTER RACE
+                    const chapterRacePromises = topCandidates.map(async (candidate) => {
+                        try {
+                            const slug = candidate.url.split('/').pop() || '';
+                            const chapters = await MangaPillService.getChapters(candidate.id, slug);
+                            return { candidate, chapters, count: chapters.length };
+                        } catch (e) {
+                            console.error(`${logPrefix} Failed to load chapters for ${candidate.title}`, e);
+                            return { candidate, chapters: [], count: 0 };
+                        }
+                    });
+
+                    const raceResults = await Promise.all(chapterRacePromises);
+
+                    // Check generation after await
+                    if (searchGenerationRef.current !== localGeneration) return;
+
+                    const raceLogStr = raceResults.map(r => `${r.candidate.title.substring(0, 15)}...: ${r.count}ch`).join(', ');
+                    console.log(`${logPrefix} Race Results: ${raceLogStr}`);
+
+                    setDebugInfo(prev => ({
+                        ...prev,
+                        raceLog: `${logPrefix} ${raceLogStr}`
+                    }));
+
+                    // Find winner
+                    const winner = raceResults.reduce((prev, current) => {
+                        return (current.count > prev.count) ? current : prev;
+                    });
+
+                    console.log(`${logPrefix} RACE WINNER: "${winner.candidate.title}" with ${winner.count} chapters.`);
+
+                    if (winner.count > 0) {
+                        const sortedChapters = [...winner.chapters].sort((a, b) => parseFloat(a.number) - parseFloat(b.number));
+
+                        // ANTI-DOWNGRADE PROTECTION
+                        if (loadedMangaIdRef.current && loadedMangaIdRef.current === winner.candidate.id) {
+                            if (winner.count < loadedChapterCountRef.current) {
+                                const msg = `${logPrefix} [Protection] BLOCKED DOWNGRADE: New load has ${winner.count} ch, current has ${loadedChapterCountRef.current} ch.`;
+                                console.warn(msg);
+                                setDebugInfo(prev => ({ ...prev, lastProtection: msg }));
+                                return; // ABORT UPDATE
+                            }
+                            console.log(`${logPrefix} [Protection] Count check passed.`);
+                        }
+
+                        setChaptersLocal(sortedChapters);
+                        loadedMangaIdRef.current = winner.candidate.id;
+                        loadedChapterCountRef.current = sortedChapters.length;
+
+                        setDebugInfo(prev => ({
+                            ...prev,
+                            bestCandidate: `${winner.candidate.title} (ID: ${winner.candidate.id})`,
+                            ratio: winner.candidate.score,
+                            loadedMangaId: winner.candidate.id,
+                            loadedMangaTitle: winner.candidate.title
                         }));
 
-                        chapterList.sort((a, b) => {
-                            const numA = parseFloat(a.title.match(/Chapter\s+(\d+(\.\d+)?)/i)?.[1] || '0');
-                            const numB = parseFloat(b.title.match(/Chapter\s+(\d+(\.\d+)?)/i)?.[1] || '0');
-                            return numA - numB;
-                        });
-
-                        setChapters(chapterList);
                         foundChapters = true;
-                        break; // Found it!
+                    } else {
+                        console.warn(`${logPrefix} Winner has 0 chapters.`);
                     }
-                } else {
-                    // Webtoon Logic
+                }
+            } else {
+                // WEBTOON LOGIC
+                for (const query of searchQueries) {
+                    if (searchGenerationRef.current !== localGeneration) return;
+                    if (sourceRef.current !== currentSource) return;
+
+                    if (searchQueries.length > 1) {
+                        setLoadingProgress(`Searching for "${query}"...`);
+                    }
+
                     const searchResults = await WebtoonService.searchManga(query);
 
+                    // Check generation after await
+                    if (searchGenerationRef.current !== localGeneration) return;
+
                     if (searchResults.length > 0) {
-                        const firstResult = searchResults[0];
+                        // Smart Matching for Webtoon
+                        const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+                        const levenshtein = (a: string, b: string): number => {
+                            const matrix = [];
+                            for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+                            for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+                            for (let i = 1; i <= b.length; i++) {
+                                for (let j = 1; j <= a.length; j++) {
+                                    if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                                        matrix[i][j] = matrix[i - 1][j - 1];
+                                    } else {
+                                        matrix[i][j] = Math.min(
+                                            matrix[i - 1][j - 1] + 1,
+                                            matrix[i][j - 1] + 1,
+                                            matrix[i - 1][j] + 1
+                                        );
+                                    }
+                                }
+                            }
+                            return matrix[b.length][a.length];
+                        };
+
+                        let bestMatch = searchResults[0];
+                        let minDistance = Infinity;
+                        const target = normalize(query);
+
+                        for (const result of searchResults) {
+                            const source = normalize(result.title);
+                            if (source === target) {
+                                bestMatch = result;
+                                minDistance = 0;
+                                break;
+                            }
+                            const dist = levenshtein(source, target);
+                            if (dist < minDistance) {
+                                minDistance = dist;
+                                bestMatch = result;
+                            }
+                        }
+
+                        const maxLen = Math.max(target.length, normalize(bestMatch.title).length);
+                        const ratio = maxLen > 0 ? minDistance / maxLen : 1;
+
+                        console.log(`${logPrefix} [Webtoon] Query: "${query}" | Best: "${bestMatch.title}" (Ratio: ${ratio.toFixed(2)})`);
+
+                        if (ratio > 0.4) {
+                            continue;
+                        }
+
+                        const firstResult = bestMatch;
                         onViewStateChange({
                             currentMangaId: firstResult.id,
                             webtoonMangaUrl: firstResult.url
@@ -254,6 +505,9 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
 
                         const { WebtoonMobileService } = await import('../services/WebtoonMobileService');
                         const episodes = await WebtoonMobileService.getChapters(firstResult.id);
+
+                        // Check generation after await
+                        if (searchGenerationRef.current !== localGeneration) return;
 
                         if (episodes.length > 0) {
                             const chapterList: WebtoonChapter[] = episodes.map(ep => ({
@@ -265,84 +519,59 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
 
                             chapterList.sort((a, b) => parseInt(a.id) - parseInt(b.id));
 
-                            // Check for locked chapters
                             const locked = await WebtoonMobileService.getLockedChapterCount(firstResult.id);
                             setLockedCount(locked);
 
-                            // HYBRID: If locked chapters exist, try to find them on ArenaScans
+                            // HYBRID LOGIC
                             if (locked > 0) {
                                 setLoadingProgress('Checking ArenaScans for locked chapters...');
                                 try {
-                                    // Prepare queries for ArenaScans (Title + Alternatives)
-                                    // Use searchQueries (includes on-the-fly alternatives)
                                     const arenaQueries = [...new Set(searchQueries)];
-
                                     for (const arenaQuery of arenaQueries) {
-                                        console.log(`[Hybrid] Searching ArenaScans for: ${arenaQuery}`);
+                                        if (searchGenerationRef.current !== localGeneration) return;
                                         const arenaResults = await ArenaScansService.search(arenaQuery);
-
                                         if (arenaResults.length > 0) {
                                             const arenaManga = arenaResults[0];
                                             const arenaChaptersRaw = await ArenaScansService.getChapters(arenaManga.slug);
 
-                                            // Create a map of Arena chapters by number
                                             const arenaMap = new Map<number, any>();
                                             arenaChaptersRaw.forEach(ch => {
                                                 const match = ch.title.match(/Chapter\s+(\d+(\.\d+)?)/i);
-                                                if (match) {
-                                                    arenaMap.set(parseFloat(match[1]), ch);
-                                                }
+                                                if (match) arenaMap.set(parseFloat(match[1]), ch);
                                             });
 
-                                            // We have the last Webtoon chapter number
                                             const lastWebtoonCh = chapterList[chapterList.length - 1];
                                             const lastWebtoonNum = parseInt(lastWebtoonCh.id);
-
-                                            // Find max chapter in ArenaScans
                                             let maxArenaNum = 0;
-                                            for (const num of arenaMap.keys()) {
-                                                if (num > maxArenaNum) maxArenaNum = num;
-                                            }
+                                            for (const num of arenaMap.keys()) if (num > maxArenaNum) maxArenaNum = num;
 
-                                            // We want to cover at least up to the locked chapters, or further if Arena has more
                                             const targetEnd = Math.max(lastWebtoonNum + locked, maxArenaNum);
                                             let foundLockedCount = 0;
 
-                                            // Append chapters from ArenaScans
                                             for (let i = lastWebtoonNum + 1; i <= targetEnd; i++) {
                                                 const arenaCh = arenaMap.get(i);
                                                 if (arenaCh) {
-                                                    // Found on ArenaScans! Add as a valid chapter
                                                     chapterList.push({
-                                                        id: `AS_${arenaCh.id}`, // Mark as ArenaScans source
-                                                        title: `Episode ${i}`, // Keep consistent naming
+                                                        id: `AS_${arenaCh.id}`,
+                                                        title: `Episode ${i}`,
                                                         date: 'ArenaScans',
                                                         url: arenaCh.url
                                                     });
-
-                                                    // If this was one of the locked chapters, count it as found
-                                                    if (i <= lastWebtoonNum + locked) {
-                                                        foundLockedCount++;
-                                                    }
+                                                    if (i <= lastWebtoonNum + locked) foundLockedCount++;
                                                 }
                                             }
-
-                                            // Reduce the locked count by the number of locked chapters we found
-                                            // This prevents double rendering (once as unlocked, once as locked placeholder)
-                                            // If we found extra chapters beyond the locked range, they are just added to the list
                                             setLockedCount(Math.max(0, locked - foundLockedCount));
-
-                                            break; // Found matches, stop searching alternatives
+                                            break;
                                         }
                                     }
                                 } catch (e) {
-                                    console.error("[Hybrid] Failed to fetch ArenaScans chapters", e);
+                                    console.error(`${logPrefix} [Hybrid] Failed`, e);
                                 }
                             }
 
-                            setChapters(chapterList);
+                            setChaptersLocal(chapterList);
                             foundChapters = true;
-                            break; // Found it!
+                            break;
                         }
                     }
                 }
@@ -350,8 +579,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
 
             if (!foundChapters) {
                 if (retryCount < 1 && !queryOverride && searchQueries.length === 1) {
-                    // Only retry if we didn't try alternatives already
-                    console.log("Manga not found, retrying in 1s...");
+                    console.log(`${logPrefix} Manga not found, retrying in 1s...`);
                     setTimeout(() => loadChapters(retryCount + 1), 1000);
                     return;
                 }
@@ -359,12 +587,14 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
             }
 
             setLoading(false);
+            isLoadingRef.current = false;
 
         } catch (err) {
             console.error(err);
             if (sourceRef.current === currentSource) {
                 setError("Failed to load chapters.");
                 setLoading(false);
+                isLoadingRef.current = false;
             }
         }
     };
@@ -509,7 +739,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                         </button>
                         <h3 className="text-lg font-bold text-white mb-2">Batch Size</h3>
                         <p className="text-gray-400 mb-4 text-sm">
-                            How many chapters do you want to load per batch? (1-500)
+                            How many chapters do you want to load per batch?
                         </p>
                         <input
                             type="number"
@@ -517,7 +747,6 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                             onChange={(e) => setTempBatchSize(e.target.value)}
                             className="w-full bg-[#141414] text-white border border-[#333] rounded p-3 mb-4 focus:border-blue-500 focus:outline-none"
                             min="1"
-                            max="500"
                         />
                         <button
                             onClick={handleSaveBatchSize}
@@ -568,7 +797,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                                                 // Actually, we need to pass this query to loadChapters.
                                                 // Let's modify loadChapters to accept an optional query override.
                                                 loadChapters(0, query);
-                                                onViewStateChange({ source: 'arenascans' }); // Default to arena for manual
+                                                onViewStateChange({ source: 'mangapill' }); // Default to mangapill for manual
                                                 setShowUnlockDialog(false);
                                             }
                                         }
@@ -576,18 +805,7 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                                 />
                             </div>
 
-                            <button
-                                onClick={() => switchToSource('arenascans')}
-                                className="flex items-center gap-3 w-full p-3 rounded bg-[#2a2a2a] hover:bg-[#333] border border-[#333] transition-colors group"
-                            >
-                                <div className="w-8 h-8 rounded bg-red-500/20 flex items-center justify-center group-hover:bg-red-500/30">
-                                    <Search size={16} className="text-red-500" />
-                                </div>
-                                <div className="flex flex-col items-start">
-                                    <span className="text-sm font-bold text-white">Search ArenaScans</span>
-                                    <span className="text-xs text-gray-500">Auto-search "{mangaTitle}"</span>
-                                </div>
-                            </button>
+
 
                             <button
                                 onClick={() => switchToSource('mangapill')}
@@ -621,6 +839,69 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                 </div>
             )}
 
+            {/* DEBUG OVERLAY */}
+            {showDebug && (
+                <div className="fixed top-4 right-4 z-50 bg-black/90 border border-yellow-500/50 rounded-lg p-3 max-w-md text-xs font-mono shadow-2xl">
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-yellow-400 font-bold">🐛 DEBUG INFO</span>
+                        <button
+                            onClick={() => {
+                                const debugText = `
+=== MANGA READER DEBUG INFO ===
+Manga Title: ${currentManga.title}
+Cache Validation: ${debugInfo.cacheValidation}
+Cached Chapters: ${debugInfo.cachedCount}
+Search Queries: ${debugInfo.searchQueries.join(', ')}
+Best Candidate: ${debugInfo.bestCandidate}
+Match Ratio: ${debugInfo.ratio.toFixed(2)}
+Loaded Manga ID: ${debugInfo.loadedMangaId}
+Loaded Manga Title: ${debugInfo.loadedMangaTitle}
+Chapters Displayed: ${chapters.length}
+First Chapter: ${chapters[0]?.title || 'N/A'}
+loadChapters Calls: ${debugInfo.loadChaptersCalls}
+setChapters Calls:
+${debugInfo.setChaptersLog.join('\n')}
+                                `.trim();
+                                navigator.clipboard.writeText(debugText);
+                                alert('Debug info copied to clipboard!');
+                            }}
+                            className="px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-400 text-xs"
+                        >
+                            📋 Copy
+                        </button>
+                    </div>
+                    <div className="space-y-1 text-gray-300">
+                        <div><span className="text-gray-500">Cache:</span> <span className={debugInfo.cacheValidation === 'VALID' ? 'text-green-400' : 'text-red-400'}>{debugInfo.cacheValidation}</span> ({debugInfo.cachedCount} chapters)</div>
+                        <div><span className="text-gray-500">Queries:</span> {debugInfo.searchQueries.join(', ') || 'N/A'}</div>
+                        <div><span className="text-gray-500">Best Match:</span> {debugInfo.bestCandidate || 'N/A'}</div>
+                        <div><span className="text-gray-500">Ratio:</span> <span className={debugInfo.ratio < 0.4 ? 'text-green-400' : 'text-red-400'}>{debugInfo.ratio.toFixed(2)}</span></div>
+                        <div><span className="text-gray-500">Loaded:</span> {debugInfo.loadedMangaTitle || 'None'} (ID: {debugInfo.loadedMangaId || 'N/A'})</div>
+                        <div><span className="text-gray-500">Chapters:</span> {chapters.length} | First: {chapters[0]?.title || 'N/A'}</div>
+
+                        <div className="mt-2 pt-2 border-t border-gray-700">
+                            <div>loadChapters Calls: {debugInfo.loadChaptersCalls}</div>
+                            <div className="mt-1">setChapters Calls:</div>
+                            {debugInfo.setChaptersLog.map((log, i) => (
+                                <div key={i} className="pl-2 text-gray-400">{log}</div>
+                            ))}
+
+                            <div className="mt-1 text-yellow-400">Race Log: {debugInfo.raceLog}</div>
+                            <div className="mt-1 text-red-400">Protection: {debugInfo.lastProtection}</div>
+
+                            <div className="mt-1">Lifecycle Log:</div>
+                            {debugInfo.lifecycleLog.map((log, i) => (
+                                <div key={i} className="pl-2 text-gray-500">{log}</div>
+                            ))}
+
+                            <div className="mt-1">LoadChapters Log:</div>
+                            {debugInfo.loadChaptersLog.map((log, i) => (
+                                <div key={i} className="pl-2 text-blue-400">{log}</div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="flex justify-between items-center mb-4 px-1">
                 <h3 className="text-white font-bold">Online Chapters</h3>
                 <div className="flex items-center gap-2">
@@ -639,8 +920,16 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                     )}
 
                     {/* Refresh Button */}
-                    <button onClick={() => loadChapters()} className="p-1 hover:bg-white/10 rounded-full transition-colors ml-1">
+                    <button onClick={() => loadChapters()} className="p-1 hover:bg-white/10 rounded-full transition-colors ml-1" title="Refresh">
                         <RefreshCw size={14} className="text-gray-400" />
+                    </button>
+
+                    <button
+                        onClick={() => setShowDebug(!showDebug)}
+                        className={`p-1 hover:bg-white/10 rounded-full transition-colors ml-1 ${showDebug ? 'text-yellow-500' : 'text-gray-400'}`}
+                        title="Toggle Debug Info"
+                    >
+                        <Bug size={14} />
                     </button>
                 </div>
             </div>
@@ -699,17 +988,32 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                 </div>
             )}
 
+
+
             {error && (
-                <div className="flex flex-col items-center justify-center py-8 gap-2">
-                    <div className="text-red-400 text-sm bg-red-900/20 px-4 py-2 rounded">
-                        {error}
+                <div className="flex flex-col items-center justify-center py-8 gap-4">
+                    <div className="text-red-400 text-sm bg-red-900/20 px-4 py-2 rounded text-center font-medium">
+                        {error === "Manga not found on MangaPill." ? "Manga non presente sul database" : error}
                     </div>
-                    <button
-                        onClick={() => loadChapters()}
-                        className="text-xs text-gray-400 underline hover:text-white"
-                    >
-                        Try Again
-                    </button>
+
+                    <div className="flex gap-3 mt-2">
+                        <button
+                            onClick={() => loadChapters()}
+                            className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full text-sm font-medium transition-colors"
+                        >
+                            Retry
+                        </button>
+
+                        <button
+                            onClick={() => {
+                                const newSource = source === 'mangapill' ? 'webtoon' : 'mangapill';
+                                onViewStateChange({ source: newSource });
+                            }}
+                            className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 px-4 py-2 rounded-full text-sm font-medium transition-colors"
+                        >
+                            Try {source === 'mangapill' ? 'Webtoon' : 'MangaPill'}
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -800,6 +1104,6 @@ export const OnlineChapterList: React.FC<OnlineChapterListProps> = ({
                     </div >
                 </div >
             )}
-        </div>
+        </div >
     );
 };

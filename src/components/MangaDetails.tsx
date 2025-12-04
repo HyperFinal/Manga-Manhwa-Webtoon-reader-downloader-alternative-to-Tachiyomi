@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { StorageService } from '../services/StorageService';
 import type { Manga, Chapter } from '../services/StorageService';
 import { ArrowLeft, Plus, Play, Trash2, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { AppConfig } from '../config/AppConfig';
 import { OnlineChapterList } from './OnlineChapterList';
 
 interface MangaDetailsProps {
@@ -358,7 +359,12 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                                             </div>
                                                         )}
                                                         <div className="min-w-0">
-                                                            <h4 className={`font-medium truncate ${manga.lastReadChapterId === chapter.id ? 'text-blue-400' : 'text-gray-200'}`}>
+                                                            <h4 className={`font-medium truncate ${manga.lastReadChapterId === chapter.id ? 'text-blue-400' :
+                                                                    (manga.readChapters?.includes(chapter.id) || manga.readChapters?.some(readId => {
+                                                                        const readChapter = manga.chapters.find(c => c.id === readId);
+                                                                        return readChapter?.title === chapter.title;
+                                                                    })) ? 'text-gray-500' : 'text-gray-200'
+                                                                }`}>
                                                                 {chapter.title}
                                                             </h4>
                                                             <div className="flex items-center gap-2 mt-1">
@@ -426,7 +432,12 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
                                             </div>
                                         )}
                                         <div className="flex flex-col">
-                                            <span className={`font-medium text-sm ${manga.lastReadChapterId === chapter.id ? 'text-blue-400' : 'text-gray-200'}`}>
+                                            <span className={`font-medium text-sm ${manga.lastReadChapterId === chapter.id ? 'text-blue-400' :
+                                                (manga.readChapters?.includes(chapter.id) || manga.readChapters?.some(readId => {
+                                                    const readChapter = manga.chapters.find(c => c.id === readId);
+                                                    return readChapter?.title === chapter.title;
+                                                })) ? 'text-gray-500' : 'text-gray-200'
+                                                }`}>
                                                 {chapter.title}
                                             </span>
                                             <div className="flex gap-2">
@@ -623,12 +634,14 @@ export const MangaDetails: React.FC<MangaDetailsProps> = ({ manga, onBack, onRea
             )}
 
             {/* Debug Toggle Button */}
-            <button
-                onClick={() => setShowDebug(!showDebug)}
-                className="fixed bottom-4 right-4 bg-green-600 text-white p-3 rounded-full z-40 shadow-lg"
-            >
-                {showDebug ? '==' : 'BUG'}
-            </button>
+            {AppConfig.ENABLE_DEBUG_FEATURES && (
+                <button
+                    onClick={() => setShowDebug(!showDebug)}
+                    className="fixed bottom-4 right-4 bg-green-600 text-white p-3 rounded-full z-40 shadow-lg"
+                >
+                    {showDebug ? '==' : 'BUG'}
+                </button>
+            )}
         </div >
     );
 };

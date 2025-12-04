@@ -3,7 +3,7 @@ import { StorageService } from '../services/StorageService';
 import type { Manga } from '../services/StorageService';
 import { MangaService } from '../services/MangaService';
 import type { MangaMetadata } from '../services/MangaService';
-import { Plus, X, ArrowLeft, Eye, Heart } from 'lucide-react';
+import { Plus, X, ArrowLeft, Eye, Archive, ChevronDown, ChevronRight, CheckCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface HomeProps {
@@ -31,6 +31,10 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [previewManga, setPreviewManga] = useState<MangaMetadata | null>(null);
+
+    // Section State
+    const [isReadOpen, setIsReadOpen] = useState(false);
+    const [isArchiveOpen, setIsArchiveOpen] = useState(false);
 
     // Infinite Scroll Observer
     const observerTarget = useRef(null);
@@ -110,6 +114,13 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
                 return [...prev, genreId];
             }
         });
+    };
+
+    const toggleArchive = async (manga: Manga, e: React.MouseEvent) => {
+        e.stopPropagation();
+        const updatedManga = { ...manga, isArchived: !manga.isArchived };
+        await StorageService.saveManga(updatedManga);
+        loadLibrary(); // Reload to reflect changes
     };
 
     const handleSearch = async () => {
@@ -211,7 +222,7 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
     };
 
     return (
-        <div className="min-h-screen bg-[#141414] pb-20">
+        <div className="h-screen overflow-y-auto bg-[#141414] pb-40 custom-scrollbar">
             {/* Header / App Bar */}
             <div className="fixed top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-6 pt-[calc(env(safe-area-inset-top)+1.5rem)] z-10 flex justify-between items-center">
                 <div className="flex items-center gap-2">
@@ -223,60 +234,132 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
             {/* Library Grid */}
             <div className="p-4 pt-[calc(env(safe-area-inset-top)+8rem)] pb-24 flex flex-col gap-8">
                 {(() => {
-                    const webtoonList = library.filter(m =>
+                    // Filter Logic
+                    const archivedManga = library.filter(m => m.isArchived);
+
+                    const activeAndReadManga = library.filter(m => !m.isArchived);
+
+                    const readManga = activeAndReadManga.filter(m => {
+                        // Check if fully read (based on total chapters if known)
+                        if (m.totalChapters && m.totalChapters > 0) {
+                            return (m.readChapters?.length || 0) >= m.totalChapters;
+                        }
+                        // If total unknown, maybe rely on status? But user said "leggo tutti i capitoli"
+                        // For now, let's stick to totalChapters check if available.
+                        // Or if status is Finished and we have read some chapters?
+                        // Let's be strict: only if totalChapters matches readChapters count.
+                        return false;
+                    });
+
+                    const activeManga = activeAndReadManga.filter(m => !readManga.includes(m));
+
+                    // Helper to render a grid of manga
+                    const renderMangaGrid = (list: Manga[]) => {
+                        if (list.length === 0) return <div className="text-gray-500 text-sm italic">No manga in this section</div>;
+                        return (
+                            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                {list.map((manga) => (
+                                    <motion.div
+                                        key={manga.id}
+                                        className="relative aspect-[2/3] rounded-md overflow-hidden cursor-pointer group"
+                                        whileTap={{ scale: 0.95 }}
+                                        onClick={() => onMangaSelect(manga)}
+                                    >
+                                        <img src={manga.coverUrl} alt={manga.title} className="w-full h-full object-cover" />
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2">
+                                            <h3 className="text-white text-xs font-bold line-clamp-2">{manga.title}</h3>
+                                            <p className="text-[10px] text-gray-400">{manga.chapters.length} eps</p>
+                                        </div>
+
+                                        {/* Archive/Unarchive Button */}
+                                        <button
+                                            onClick={(e) => toggleArchive(manga, e)}
+                                            className="absolute top-2 right-2 p-2 bg-black/60 rounded-full text-white hover:bg-black/80 z-10"
+                                            title={manga.isArchived ? "Unarchive" : "Archive"}
+                                        >
+                                            {manga.isArchived ? <Plus size={16} /> : <Archive size={16} />}
+                                        </button>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        );
+                    };
+
+                    const webtoonList = activeManga.filter(m =>
                         m.type === 'Manhwa' ||
                         m.type === 'Manhua' ||
                         m.genres?.some(g => g.toLowerCase() === 'webtoon')
                     );
-                    const mangaList = library.filter(m => !webtoonList.includes(m));
+                    const mangaList = activeManga.filter(m => !webtoonList.includes(m));
 
                     if (library.length === 0) return null;
 
                     return (
                         <>
+                            {/* Active Manga Section */}
                             {mangaList.length > 0 && (
                                 <div className="flex flex-col gap-3">
                                     <h2 className="text-white font-bold text-lg px-1 border-l-4 border-red-600 pl-2">Manga</h2>
-                                    <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                                        {mangaList.map((manga) => (
-                                            <motion.div
-                                                key={manga.id}
-                                                className="relative aspect-[2/3] rounded-md overflow-hidden cursor-pointer group"
-                                                whileTap={{ scale: 0.95 }}
-                                                onClick={() => onMangaSelect(manga)}
-                                            >
-                                                <img src={manga.coverUrl} alt={manga.title} className="w-full h-full object-cover" />
-                                                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2">
-                                                    <h3 className="text-white text-xs font-bold line-clamp-2">{manga.title}</h3>
-                                                    <p className="text-[10px] text-gray-400">{manga.chapters.length} eps</p>
-                                                </div>
-                                            </motion.div>
-                                        ))}
-                                    </div>
+                                    {renderMangaGrid(mangaList)}
                                 </div>
                             )}
 
                             {webtoonList.length > 0 && (
                                 <div className="flex flex-col gap-3">
                                     <h2 className="text-white font-bold text-lg px-1 border-l-4 border-green-500 pl-2">Manhwa & Webtoons</h2>
-                                    <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                                        {webtoonList.map((manga) => (
-                                            <motion.div
-                                                key={manga.id}
-                                                className="relative aspect-[2/3] rounded-md overflow-hidden cursor-pointer group"
-                                                whileTap={{ scale: 0.95 }}
-                                                onClick={() => onMangaSelect(manga)}
-                                            >
-                                                <img src={manga.coverUrl} alt={manga.title} className="w-full h-full object-cover" />
-                                                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2">
-                                                    <h3 className="text-white text-xs font-bold line-clamp-2">{manga.title}</h3>
-                                                    <p className="text-[10px] text-gray-400">{manga.chapters.length} eps</p>
-                                                </div>
-                                            </motion.div>
-                                        ))}
-                                    </div>
+                                    {renderMangaGrid(webtoonList)}
                                 </div>
                             )}
+
+                            {/* Read Section */}
+                            {readManga.length > 0 && (
+                                <div className="mt-4 border-t border-gray-800 pt-4">
+                                    <button
+                                        onClick={() => setIsReadOpen(!isReadOpen)}
+                                        className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors w-full"
+                                    >
+                                        {isReadOpen ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                                        <span className="font-bold text-lg">Read ({readManga.length})</span>
+                                        <CheckCircle size={16} className="text-green-500 ml-auto" />
+                                    </button>
+                                    <AnimatePresence>
+                                        {isReadOpen && (
+                                            <motion.div
+                                                initial={{ height: 0, opacity: 0 }}
+                                                animate={{ height: 'auto', opacity: 1 }}
+                                                exit={{ height: 0, opacity: 0 }}
+                                                className="overflow-hidden mt-3"
+                                            >
+                                                {renderMangaGrid(readManga)}
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+                                </div>
+                            )}
+
+                            {/* Archive Section */}
+                            <div className="mt-2 border-t border-gray-800 pt-4">
+                                <button
+                                    onClick={() => setIsArchiveOpen(!isArchiveOpen)}
+                                    className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors w-full"
+                                >
+                                    {isArchiveOpen ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                                    <span className="font-bold text-lg">Archive ({archivedManga.length})</span>
+                                    <Archive size={16} className="text-gray-500 ml-auto" />
+                                </button>
+                                <AnimatePresence>
+                                    {isArchiveOpen && (
+                                        <motion.div
+                                            initial={{ height: 0, opacity: 0 }}
+                                            animate={{ height: 'auto', opacity: 1 }}
+                                            exit={{ height: 0, opacity: 0 }}
+                                            className="overflow-hidden mt-3"
+                                        >
+                                            {renderMangaGrid(archivedManga)}
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
                         </>
                     );
                 })()}
@@ -297,17 +380,7 @@ export const Home: React.FC<HomeProps> = ({ onMangaSelect, showAddModal, setShow
             {/* Floating Action Button for Add */}
             {library.length > 0 && (
                 <>
-                    <motion.a
-                        href="https://www.paypal.com/donate/?hosted_button_id=RYRGN9J2U3AYW"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.9 }}
-                        className="fixed bottom-6 left-6 bg-[#FF69B4] text-white px-4 py-3 rounded-full flex items-center gap-2 shadow-lg z-20 font-bold text-sm hover:bg-[#ff1493] transition-colors"
-                    >
-                        <Heart size={20} fill="white" />
-                        <span>Support</span>
-                    </motion.a>
+
 
                     <motion.button
                         whileHover={{ scale: 1.1 }}

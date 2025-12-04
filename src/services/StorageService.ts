@@ -26,6 +26,7 @@ export interface Manga {
     sourceMangaId?: string;
     preferredBatchSize?: number;
     alternativeTitles?: string[];
+    isArchived?: boolean;
 }
 
 const MANGA_KEY = 'manga_library';
