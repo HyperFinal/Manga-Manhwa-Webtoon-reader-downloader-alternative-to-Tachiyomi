@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { motion, AnimatePresence, useMotionValue, animate } from 'framer-motion';
-import { X, Settings, Bug, Loader2 } from 'lucide-react';
+import { X, Settings, Bug, Loader2, Volume2, VolumeX, Music } from 'lucide-react';
 import { AppConfig } from '../config/AppConfig';
 import { MangaPillService } from '../services/MangaPillService';
 import { WebtoonService } from '../services/WebtoonService';
 import { ArenaScansService } from '../services/ArenaScansService';
 import { StorageService, type Manga, type Chapter } from '../services/StorageService';
 import { DownloadService } from '../services/DownloadService';
+import { MoodAnalysisService, type Mood } from '../services/MoodAnalysisService';
+import { AudioContextService } from '../services/AudioContextService';
 
 interface ReaderProps {
     chapterFileName: string;
@@ -35,7 +37,7 @@ interface LoadedChapter {
 // Helper Component for Zoom
 // Helper Component for Zoom
 // Helper Component for Zoom
-const ZoomableImage = ({ src, alt, onDoubleTap, priority = false }: { src: string, alt: string, onDoubleTap?: () => void, priority?: boolean }) => {
+const ZoomableImage = ({ src, alt, onDoubleTap, priority = false, id }: { src: string, alt: string, onDoubleTap?: () => void, priority?: boolean, id?: string }) => {
     const x = useMotionValue(0);
     const y = useMotionValue(0);
     const scale = useMotionValue(1);
@@ -225,6 +227,7 @@ const ZoomableImage = ({ src, alt, onDoubleTap, priority = false }: { src: strin
             onTouchEnd={handleTouchEnd}
         >
             <motion.img
+                id={id}
                 src={blobUrl}
                 alt={alt}
                 style={{ x, y, scale, cursor: constraintScale > 1 ? 'grab' : 'default' }}
@@ -243,7 +246,7 @@ const ZoomableImage = ({ src, alt, onDoubleTap, priority = false }: { src: strin
 };
 
 // Simple Secure Image for Vertical Mode
-const SecureImage = ({ src, alt, priority = false }: { src: string, alt: string, priority?: boolean }) => {
+const SecureImage = ({ src, alt, priority = false, id }: { src: string, alt: string, priority?: boolean, id?: string }) => {
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
     const [error, setError] = useState(false);
 
@@ -335,6 +338,7 @@ const SecureImage = ({ src, alt, priority = false }: { src: string, alt: string,
 
     return (
         <img
+            id={id}
             src={blobUrl}
             alt={alt}
             className="w-full h-auto block"
@@ -392,6 +396,49 @@ export const Reader: React.FC<ReaderProps> = ({
     // Debug State
     const [debugLogs, setDebugLogs] = useState<string[]>([]);
     const [showDebug, setShowDebug] = useState(false);
+
+    // Audio State
+    const [currentMood, setCurrentMood] = useState<Mood | 'none'>('none');
+    const [isMuted, setIsMuted] = useState(false);
+
+    // Initialize Audio Service
+    useEffect(() => {
+        AudioContextService.initialize();
+        return () => {
+            AudioContextService.stopAll();
+        };
+    }, []);
+
+    // Analyze Mood on Page Change
+    useEffect(() => {
+        const analyzeCurrentPage = async () => {
+            // Give time for image to render
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            const imgId = `page-img-${currentPage}`;
+            const imgElement = document.getElementById(imgId) as HTMLImageElement;
+
+            if (imgElement && imgElement.complete && imgElement.naturalWidth > 0) {
+                // Use crossOrigin anonymous if possible, but SecureImage uses blob so it's fine.
+                // However, MoodAnalysis uses canvas. drawImage with blob URL works fine.
+                const mood = await MoodAnalysisService.analyzeImage(imgElement);
+                if (mood !== 'unknown') {
+                    setCurrentMood(mood);
+                    if (!isMuted) {
+                        AudioContextService.playMood(mood);
+                    }
+                }
+            }
+        };
+
+        analyzeCurrentPage();
+    }, [currentPage, activeChapterId, isMuted]); // Re-run when page or chapter changes
+
+    // Toggle Mute
+    const toggleMute = () => {
+        const muted = AudioContextService.toggleMute();
+        setIsMuted(muted);
+    };
 
     const addLog = (msg: string) => {
         console.log(msg);
@@ -1416,6 +1463,38 @@ export const Reader: React.FC<ReaderProps> = ({
                 )}
             </AnimatePresence>
 
+            {/* Audio Controls Overlay */}
+            <AnimatePresence>
+                {showControls && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="absolute top-16 right-4 z-50 flex flex-col gap-2 items-end"
+                    >
+                        <div className="bg-black/80 backdrop-blur-md border border-gray-800 rounded-lg p-3 flex flex-col gap-2 shadow-xl">
+                            <div className="flex items-center justify-between gap-4">
+                                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Soundtrack</span>
+                                <button onClick={toggleMute} className="text-white hover:text-blue-400 transition-colors">
+                                    {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                                </button>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <Music size={14} className="text-purple-400" />
+                                <span className="text-xs text-white font-mono">
+                                    {currentMood === 'none' ? 'Waiting...' : currentMood.toUpperCase()}
+                                </span>
+                            </div>
+
+                            <div className="h-1 w-full bg-gray-700 rounded-full overflow-hidden mt-1">
+                                <div className="h-full bg-purple-500 animate-pulse w-full opacity-50"></div>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Main Reader Area */}
             <div
                 className="flex-1 relative w-full h-full"
@@ -1447,6 +1526,7 @@ export const Reader: React.FC<ReaderProps> = ({
                                 {chapter.status === 'loaded' && chapter.pages.map((page, index) => (
                                     <div key={index} className="w-full max-w-3xl mx-auto relative chapter-image" id={`page-${chapter.id}-${index}`}>
                                         <SecureImage
+                                            id={chapter.id === activeChapterId ? `page-img-${index}` : undefined}
                                             src={page}
                                             alt={`Page ${index + 1}`}
                                             priority={index < 3}
@@ -1550,6 +1630,7 @@ export const Reader: React.FC<ReaderProps> = ({
                                         id={`page-${chapter.id}-${index}`}
                                     >
                                         <ZoomableImage
+                                            id={chapter.id === activeChapterId ? `page-img-${index}` : undefined}
                                             src={page}
                                             alt={`Page ${index + 1}`}
                                             onDoubleTap={() => setShowControls(prev => !prev)}
